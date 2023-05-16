@@ -146,3 +146,10 @@ def viser_vis_colmap(
             visualize_colmap()
 
         time.sleep(1e-3)
+
+def viser_vis_pcd(points, rgb, server=None):
+    if server is None:
+        server = viser.ViserServer()
+    
+    server.add_point_cloud("/pcd", points, (rgb * 255.).astype(onp.uint8))
+    

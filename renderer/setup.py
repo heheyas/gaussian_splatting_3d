@@ -1,5 +1,6 @@
 import os
-from torch.utils.cpp_extension import load
+from setuptools import setup
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 _src_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,17 +41,25 @@ elif os.name == "nt":
             )
         os.environ["PATH"] += ";" + cl_path
 
-_backend = load(
-    name="_renderer",
-    extra_cflags=c_flags,
-    extra_cuda_cflags=nvcc_flags,
-    sources=[
-        os.path.join(_src_path, "src", f)
-        for f in [
-            "renderer.cu",
-            "bindings.cpp",
-        ]
+setup(
+    name="renderer",  # package name, import this to use python API
+    ext_modules=[
+        CUDAExtension(
+            name="_renderer",  # extension name, import this to use CUDA API
+            sources=[
+                os.path.join(_src_path, "src", f)
+                for f in [
+                    "renderer.cu",
+                    "bindings.cpp",
+                ]
+            ],
+            extra_compile_args={
+                "cxx": c_flags,
+                "nvcc": nvcc_flags,
+            },
+        ),
     ],
+    cmdclass={
+        "build_ext": BuildExtension,
+    },
 )
-
-__all__ = ["_backend"]

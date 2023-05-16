@@ -1,0 +1,3 @@
+Frustum culling: https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling and https://bruop.github.io/frustum_culling/
+radix sort: https://nvlabs.github.io/cub/structcub_1_1_device_radix_sort.html
+tiled rasterization: https://tayfunkayhan.wordpress.com/2019/07/26/chasing-triangles-in-a-tile-based-rasterizer/ and https://developer.samsung.com/galaxy-gamedev/resources/articles/gpu-framebuffer.html

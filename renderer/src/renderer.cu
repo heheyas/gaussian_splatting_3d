@@ -1,3 +1,4 @@
+#include "kernels.cu"
 #include "renderer.h"
 #include <cub/cub.cuh>
 #include <stdint.h>
@@ -21,31 +22,83 @@
 
 #define TILE 16
 
-// __device__ float3 operator+(const float3 &a, const float3 &b) {
-//   return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
-// }
-
-// __device__ float3 operator1(const float3 &a, const float3 &b) {
-//   return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
-// }
-
 template <typename T>
 __host__ __device__ inline T div_round_up(T val, T divisor) {
   return (val + divisor - 1) / divisor;
 }
 
+__device__ inline bool above_plane(float3 *mean, float3 *normals, float3 *pts) {
+  return dot(*mean - *pts, *normals) > 0.0f;
+}
+
+__device__ bool on_frustum(float *query, float *normals, float *pts) {
+  float3 *normals_ = reinterpret_cast<float3 *>(normals);
+  float3 *pts_ = reinterpret_cast<float3 *>(pts);
+  float3 *query_ = reinterpret_cast<float3 *>(query);
+  for (int i = 0; i < 6; ++i) {
+    if (dot(query_[0] - pts_[i], normals_[i]) < -EPS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+__device__ bool on_frustum(float3 *query, float3 *normals, float3 *pts) {
+  for (int i = 0; i < 6; ++i) {
+    if (dot(query[0] - pts[i], normals[i]) < -EPS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+__device__ bool intersect_gaussian_plane(float *mean, float *sigma_inv,
+                                         float *normal, float *pts,
+                                         float thresh = 0.01f) {
+  float3 mean_ = reinterpret_cast<float3 *>(mean)[0];
+  float3 normal_ = reinterpret_cast<float3 *>(normal)[0];
+  float3 pts_ = reinterpret_cast<float3 *>(pts)[0];
+  float3 nearest_ = mean_ - dot(normal_, mean_ - pts_) * normal_;
+  float3 *sigma_inv_ = reinterpret_cast<float3 *>(sigma_inv);
+
+  return gaussian_kernel_3d_with_inv(&mean_, sigma_inv_, &nearest_) > thresh;
+}
+
+__device__ bool intersect_gaussian_plane(float *mean, float *qvec, float *svec,
+                                         float *normal, float *pts,
+                                         float thresh = 0.01) {
+
+  float3 mean_ = reinterpret_cast<float3 *>(mean)[0];
+  float3 normal_ = reinterpret_cast<float3 *>(normal)[0];
+  float3 pts_ = reinterpret_cast<float3 *>(pts)[0];
+  float3 nearest_ = mean_ - dot(normal_, mean_ - pts_) * normal_;
+  float4 *qvec_ = reinterpret_cast<float4 *>(qvec);
+  float3 *svec_ = reinterpret_cast<float3 *>(svec);
+
+  // if (!on_frustum(&mean_, &normal_, &pts_)) {
+  //   return false;
+  // }
+
+  return gaussian_kernel_3d(&mean_, qvec_, svec_, &nearest_) > thresh;
+}
+
+__device__ bool intersect_gaussian_plane_aabb(float *mean, float *qvec,
+                                              float *svec, float *normal,
+                                              float *pts, float thresh = 0.01) {
+  return false;
+}
+
 template <typename scalar_t>
-__device__ inline bool above_plane(scalar_t *query, scalar_t *normals,
-                                   scalar_t *pts) {
+__device__ bool in_frustum(scalar_t *query, scalar_t *normals, scalar_t *pts) {
   bool above = true;
 #pragma unroll
   for (int i = 0; i < 6; i++) {
     scalar_t dot_val = 0;
 #pragma unroll
-    for (int j = 0; j < 3; ++j) {
-      dot_val += (query[i] - pts[i]) * normals[i];
+    for (int j = 0; j < 3; j++) {
+      dot_val += (query[j] - pts[i * 3 + j]) * normals[i * 3 + j];
     }
-    above &= (dot_val > 0.0f);
+    above = above && (dot_val > 0);
   }
   return above;
 }
@@ -59,11 +112,9 @@ __global__ void naive_cull_gaussian_kernel(uint32_t N, scalar_t *mean,
     return;
 
   mean += n * 3;
-  // normals += n * 3 * 6;
-  // pts += n * 3 * 6;
-  mask += n;
+  // mask += n;
 
-  *mask = above_plane(mean, normals, pts);
+  mask[n] = in_frustum(mean, normals, pts);
 }
 
 template <typename scalar_t>
@@ -75,8 +126,57 @@ void naive_cull_gaussian_cuda(uint32_t N, scalar_t *mean, scalar_t *normals,
       <<<n_blocks, N_THREAD>>>(N, mean, normals, pts, mask);
 }
 
-void CullGaussian(uint32_t N, Tensor mean, Tensor qvec, Tensor svec,
-                  Tensor normals, Tensor pts, Tensor mask) {
+__global__ void cull_gaussian_kernel(uint32_t N, float *mean, float *qvec,
+                                     float *svec, float *normals, float *pts,
+                                     bool *mask, float thresh) {
+  const uint32_t n = blockIdx.x * blockDim.x + threadIdx.x;
+  if (n >= N)
+    return;
+
+  mean += n * 3;
+  mask += n;
+  bool on = on_frustum(reinterpret_cast<float3 *>(mean),
+                       reinterpret_cast<float3 *>(normals),
+                       reinterpret_cast<float3 *>(pts));
+  if (on) {
+    printf("there do exists !!!\n");
+  }
+
+  bool inside_frustum = in_frustum(mean, normals, pts);
+  if (inside_frustum) {
+    *mask = true;
+    return;
+  } else {
+    bool intersect = false;
+#pragma unroll
+    for (int i = 0; i < 6; ++i) {
+      bool on = on_frustum(reinterpret_cast<float3 *>(mean),
+                           reinterpret_cast<float3 *>(normals),
+                           reinterpret_cast<float3 *>(pts));
+      if (on) {
+        printf("there do exists !!!\n");
+      }
+      intersect = intersect ||
+                  (intersect_gaussian_plane(mean, qvec, svec, normals + 3 * i,
+                                            pts + 3 * i, thresh) &&
+                   on_frustum(reinterpret_cast<float3 *>(mean),
+                              reinterpret_cast<float3 *>(normals),
+                              reinterpret_cast<float3 *>(pts)));
+    }
+    *mask = intersect;
+  }
+}
+
+void cull_gaussian_cuda(uint32_t N, float *mean, float *qvec, float *svec,
+                        float *normals, float *pts, bool *mask, float thresh) {
+  static constexpr uint32_t N_THREAD = 256;
+  const uint32_t n_blocks = div_round_up(N, N_THREAD);
+  cull_gaussian_kernel<<<n_blocks, N_THREAD>>>(N, mean, qvec, svec, normals,
+                                               pts, mask, thresh);
+}
+
+void cull_gaussian(uint32_t N, Tensor mean, Tensor qvec, Tensor svec,
+                   Tensor normals, Tensor pts, Tensor mask, float thresh) {
   // culling gaussian according to whether the frustum is in its 99% confidence
   // interval return a tensor with index and depth
   // checks
@@ -98,35 +198,12 @@ void CullGaussian(uint32_t N, Tensor mean, Tensor qvec, Tensor svec,
   CHECK_IS_FLOATING(normals);
   CHECK_IS_FLOATING(pts);
   CHECK_IS_BOOL(mask);
-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      mean.scalar_type(), "CullGaussian", ([&] {
-        naive_cull_gaussian_cuda<scalar_t>(
-            N, mean.data_ptr<scalar_t>(), normals.data_ptr<scalar_t>(),
-            pts.data_ptr<scalar_t>(), mask.data_ptr<bool>());
-      }));
+  cull_gaussian_cuda(N, mean.data_ptr<float>(), qvec.data_ptr<float>(),
+                     svec.data_ptr<float>(), normals.data_ptr<float>(),
+                     pts.data_ptr<float>(), mask.data_ptr<bool>(), thresh);
 }
 
-// __global__ void ScreenSpaceGaussians() {
-//   // project 3d gaussians onto screen plane
-// }
-
-// __global__ void DuplicateWithKeys() {
-//   // prepare for radix sort, check visibility of gaussians towards each tile
-//   and
-//   // duplicate keys
-// }
-
-// __global__ void IdentiyTileRange() {
-//   // find range for each tile on the sorted array
-// }
-
-// __global__ void BlendInOrder() {
-//   // do volumetric rendering
-// }
-
-// __global__ void tiled_rasterize(uint32_t width, uint32_t height, Guassian G)
-// {
-//   uint32_t n_tile_w = width / TILE + (width % TILE != 0);
-//   uint32_t n_tile_h = height / TILE + (height % TILE != 0);
-//   uint32_t n_tile = n_tile_h * n_tile_w;
-// }
+__global__ void ScreenSpaceGaussians(Tensor mean, Tensor qvec, Tensor svec,
+                                     Tensor) {
+  // project 3d gaussians onto screen plane
+}

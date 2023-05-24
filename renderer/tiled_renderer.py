@@ -4,3 +4,6 @@ import torch.nn as nn
 
 class TiledRenderer(nn.Module):
     pass
+
+    def global_culling(self):
+        pass

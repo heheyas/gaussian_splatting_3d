@@ -1,6 +1,5 @@
 """COLMAP visualizer
 """
-
 import time
 from pathlib import Path
 
@@ -16,6 +15,8 @@ from viser.extras.colmap import (
     read_images_binary,
     read_points3d_binary,
 )
+
+import trimesh
 
 
 def viser_vis_colmap(
@@ -146,10 +147,3 @@ def viser_vis_colmap(
             visualize_colmap()
 
         time.sleep(1e-3)
-
-def viser_vis_pcd(points, rgb, server=None):
-    if server is None:
-        server = viser.ViserServer()
-    
-    server.add_point_cloud("/pcd", points, (rgb * 255.).astype(onp.uint8))
-    

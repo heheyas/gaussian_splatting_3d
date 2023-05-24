@@ -1,10 +1,10 @@
 from pathlib import Path
 import numpy as np
 import torch
+import torch.nn.functional as F
 from .colmap import read_images, read_cameras, read_pts_from_colmap
 
 """Using OpenCV coordinates"""
-
 
 class PerspectiveCameras:
     def __init__(self, c2ws, fx, fy, cx, cy, w, h) -> None:
@@ -19,6 +19,47 @@ class PerspectiveCameras:
 
     def to(self, device):
         self.c2ws = self.c2ws.to(device)
+
+    def get_frustum_pts(self, idx, near_plane, far_plane):
+        if idx < 0 or idx >= self.n_cams:
+            raise ValueError
+
+        c2w = self.c2ws[idx]
+
+        up = -c2w[:, 1]
+        right = c2w[:, 0]
+        lookat = c2w[:, 2]
+        t = c2w[:, 3]
+
+        half_vside = far_plane * np.tan(self.yfov * 0.5)
+        half_hside = half_vside * self.aspect
+
+        near_point = near_plane * lookat + t
+        far_point = far_plane * lookat + t
+        near_normal = lookat
+        far_normal = -lookat
+
+        left_normal = torch.cross(far_point - half_hside * right, up)
+        right_normal = torch.cross(far_point + half_hside * right, up)
+
+        up_normal = torch.cross(right, far_point + half_vside * up)
+        down_normal = torch.cross(right, far_point - half_vside * up)
+
+        corners = []
+        for a in [-1, 1]:
+            for b in [-1, 1]:
+                corners.append(near_point + a * half_hside * near_plane / far_plane * right + b * half_vside * near_plane / far_plane * up)
+
+        for a in [-1, 1]:
+            for b in [-1, 1]:
+                corners.append(far_point + a * half_hside * right + b * half_vside * up)
+
+        return corners
+    
+    # depreatied 
+    # def get_tile_frustum(self, idx, near_plane, far_plane, tile_size=16):
+    #     if not tile_size == 16:
+    #         raise NotImplementedError
 
     def get_frustum(self, idx, near_plane, far_plane):
         if idx < 0 or idx >= self.n_cams:
@@ -40,12 +81,12 @@ class PerspectiveCameras:
         far_normal = -lookat
 
         left_normal = torch.cross(far_point - half_hside * right, up)
-        right_normal = torch.cross(far_point + half_hside * right, up)
+        right_normal = torch.cross(up, far_point + half_hside * right)
 
-        up_normal = torch.cross(right, far_point + half_vside * up)
+        up_normal = torch.cross(far_point + half_vside * up, right)
         down_normal = torch.cross(right, far_point - half_vside * up)
 
-        pts = [near_point, far_point, t, t, t, t]
+        pts = [near_point + t, far_point + t, t, t, t, t]
         normals = [
             near_normal,
             far_normal,
@@ -57,8 +98,27 @@ class PerspectiveCameras:
 
         pts = torch.stack(pts, dim=0)
         normals = torch.stack(normals, dim=0)
+        normals = F.normalize(normals, dim=-1)
 
         return normals, pts
+
+    def get_all_rays_o(self, idx):
+        xp = (torch.arange(0, self.w, dtype=torch.float32) - self.cx) / self.fx
+        yp = (torch.arange(0, self.h, dtype=torch.float32) - self.cy) / self.fy
+        
+        xp, yp = torch.meshgrid(xp, yp, indexing="ij")
+        xp = xp.reshape(-1)
+        yp = yp.reshape(-1)
+        padding = torch.ones_like(xp)
+
+        xyz_cam = torch.stack([xp, yp, padding], dim=-1)
+        
+        rot = self.c2ws[idx][:3, :3]
+        t = self.c2ws[idx][:3][3]
+
+        xyz_world = t + torch.einsum("ij,bj->bi", rot, xyz_cam)
+
+        return xyz_world
 
 
 def get_data(cfg):
@@ -84,3 +144,11 @@ def get_data(cfg):
         cams = PerspectiveCameras(c2ws, float(params[0]), float(params[1]), float(params[2]), float(params[3]), camera.width, camera.height)
 
     return cams, images, pts, rgb
+
+def in_frustum(queries, normal, pts):
+    is_in = torch.ones_like(queries[..., 0], dtype=torch.bool)
+    for i in range(6):
+        in_test = torch.einsum("bj,j->b", queries - pts[i], normal[i]) > 0.0
+        is_in = torch.logical_and(is_in, in_test)
+
+    return is_in

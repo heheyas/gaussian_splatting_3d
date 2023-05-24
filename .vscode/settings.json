@@ -2,6 +2,9 @@
     "clang-format.executable": "/opt/czl/anaconda3/envs/TRTT/bin/clang-format",
     "files.associations": {
         "*.cu": "cpp",
-        "cstdint": "cpp"
-    }
+        "cstdint": "cpp",
+        "cmath": "cpp",
+        "valarray": "cpp"
+    },
+    "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs"
 }

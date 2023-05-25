@@ -1,5 +1,5 @@
 {
-    "clang-format.executable": "/opt/czl/anaconda3/envs/TRTT/bin/clang-format",
+    "clang-format.executable": "/opt/czl/anaconda3/envs/gs/bin/clang-format",
     "files.associations": {
         "*.cu": "cpp",
         "cstdint": "cpp",

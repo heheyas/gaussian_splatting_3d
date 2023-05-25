@@ -29,4 +29,10 @@ struct Renderer {
   uint32_t *ids_d;
   uint32_t *ids_expanded;
 };
+
+struct Tile {
+  float2 topleft;
+  uint32_t xe, ye;
+};
+
 #endif

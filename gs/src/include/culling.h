@@ -38,7 +38,8 @@ __global__ void culling_gaussian_bsphere_kernel(uint32_t N, float3 *mean,
 //   }
 // }
 
-// void culling_gaussian_bbox(float *mean, float *qvec, float *svec, float *normal,
+// void culling_gaussian_bbox(float *mean, float *qvec, float *svec, float
+// *normal,
 //                            float *pts, bool *mask) {
 //   float3 *mean_ = reinterpret_cast<float3 *>(mean);
 //   float4 *qvec_ = reinterpret_cast<float4 *>(qvec);

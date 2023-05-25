@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "data_spec.h"
 #include "helper_math.h"
 #include <assert.h>
 #include <cuda.h>
@@ -98,6 +99,19 @@ __device__ float gaussian_kernel_3d(float3 *mean, float4 *qvec, float3 *svec,
   return gaussian_kernel_3d_with_inv(mean, sigma_inv, query) / det_sqr;
 }
 
+__device__ inline float det2x2(float2 *m) {
+  return m[0].x * m[1].y - m[0].y * m[1].x;
+}
+
+__device__ float gaussian_kernel_2d(float2 &mean, float2 *cov_inv,
+                                    float2 &query) {
+  float2 mu = query - mean;
+  float2 tmp = make_float2(dot(query, cov_inv[0]), dot(query, cov_inv[1]));
+  float e_tmp = dot(tmp, query) * 0.5f;
+
+  return gs_coeff_2d * __expf(-e_tmp) / det2x2(cov_inv);
+}
+
 // __device__ void covariance2bbox(float3 &mean, float4 &qvec, float3 &svec,
 //                                 bbox3d &bbox, float thresh = 3.0f) {
 //   float3 rotmat[3];
@@ -153,4 +167,31 @@ __device__ bool intersect_sphere_frustum(float3 &query, float radius,
     }
   }
   return true;
+}
+
+__device__ bool intersect_tile_gaussian2d(float2 &topleft, uint32_t tile_size,
+                                          float pixel_size_x,
+                                          float pixel_size_y, float2 *mean,
+                                          float2 *cov_inv, float thresh) {
+  float2 rela = mean[0] - topleft;
+  float px = pixel_size_x * tile_size;
+  float py = pixel_size_y * tile_size;
+  bool gaussian_inside_tile =
+      (rela.x >= 0) && (rela.x <= px) && (rela.y >= 0) && (rela.y <= py);
+  if (gaussian_inside_tile)
+    return true;
+
+  // case that the center is not inside the tile
+  float2 nearest;
+  if (rela.x * (rela.x + px) < 0) {
+    nearest.x = rela.x;
+  } else {
+    nearest.x = rela.x + (rela.x > 0 ? px : 0);
+  }
+  if (rela.y * (rela.y + py) < 0) {
+    nearest.y = rela.y;
+  } else {
+    nearest.y = rela.y + (rela.y > 0 ? py : 0);
+  }
+  return gaussian_kernel_2d(rela, cov_inv, nearest) > thresh;
 }

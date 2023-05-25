@@ -23,10 +23,13 @@
 #define CHECK_IS_INT(x)                                                        \
   TORCH_CHECK(x.scalar_type() == at::ScalarType::Int,                          \
               #x " must be an int tensor")
+// #define CHECK_IS_FLOATING(x)                                                   \
+//   TORCH_CHECK(x.scalar_type() == at::ScalarType::Float ||                      \
+//                   x.scalar_type() == at::ScalarType::Half ||                   \
+//                   x.scalar_type() == at::ScalarType::Double,                   \
+//               #x " must be a floating tensor")
 #define CHECK_IS_FLOATING(x)                                                   \
-  TORCH_CHECK(x.scalar_type() == at::ScalarType::Float ||                      \
-                  x.scalar_type() == at::ScalarType::Half ||                   \
-                  x.scalar_type() == at::ScalarType::Double,                   \
+  TORCH_CHECK(x.scalar_type() == at::ScalarType::Float,                        \
               #x " must be a floating tensor")
 
 using torch::Tensor;
@@ -34,6 +37,8 @@ using torch::Tensor;
 const float EPS = 1e-6;
 const float gs_coeff_3d = 0.06349363593424097f; // 1 / (2 * pi) ** (3/2)
 const float gs_coeff_2d = 0.15915494309189535f; // 1 / (2 * pi)
+
+const int MAX_N_FLOAT_SM = 11000;
 
 template <typename T>
 __host__ __device__ inline T div_round_up(T val, T divisor) {

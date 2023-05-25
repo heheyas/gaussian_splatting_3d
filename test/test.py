@@ -68,6 +68,48 @@ def test_culling():
         time.sleep(1e-3)
 
 
+def test_culling_on_real():
+    camera, images, xyz, rgb = get_data(config())
+    normals, pts = camera.get_frustum(1, 0.1, 1000)
+    N = pts.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.3
+    mask = torch.zeros(N, dtype=torch.bool).to("cuda")
+    xyz = torch.from_numpy(xyz)
+    xyz = xyz.to("cuda").to(torch.float32)
+    print(xyz.shape)
+
+    camera = camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+
+    is_in = in_frustum(xyz, normals, pts)
+    print(is_in.sum().item())
+    xyz = xyz[is_in]
+    x, y, z = xyz.unbind(dim=-1)
+    # fig = go.Figure(data=[go.Scatter3d(x=x, y=y, z=z,
+    #                                mode='markers')])
+    xyz = xyz.cpu()
+
+    # fig.show()
+    server = viser.ViserServer()
+
+    def vis():
+        server.add_point_cloud(
+            name="/frustum/pcd",
+            points=xyz.numpy(),
+            colors=np.zeros_like(xyz.numpy()),
+        )
+
+    while True:
+        vis()
+
+        time.sleep(1e-3)
+
+
 def test_cuda_culling():
     camera, images, pts, rgb = get_data(config())
     normals, pts = camera.get_frustum(0, 1, 10)
@@ -112,54 +154,6 @@ def test_cuda_culling():
         time.sleep(1e-3)
 
 
-def test_cuda_culling_full():
-    camera, images, pts, rgb = get_data(config())
-    normals, pts = camera.get_frustum(0, 1, 10)
-    x = torch.linspace(-20, 20, 200)
-    y, z = x.clone(), x.clone()
-    x, y, z = torch.meshgrid(x, y, z)
-    x = x.flatten()
-    y = y.flatten()
-    z = z.flatten()
-    xyz = torch.stack([x, y, z], dim=1)
-
-    N = xyz.shape[0]
-    qvec = torch.zeros([N, 4], dtype=torch.float32)
-    qvec[..., 0] = 1.0
-    svec = torch.ones([N, 1], dtype=torch.float32) * 100
-    mask = torch.zeros(xyz.shape[0], dtype=torch.bool).to("cuda")
-    xyz = xyz.to("cuda").to(torch.float32)
-    print(xyz.shape)
-
-    camera = camera.to("cuda")
-    normals = normals.to("cuda").to(torch.float32)
-    pts = pts.to("cuda").to(torch.float32)
-    qvec = qvec.to("cuda")
-    svec = svec.to("cuda")
-
-    from renderer.backend import _backend
-
-    _backend.cull_gaussian(xyz.shape[0], xyz, qvec, svec, normals, pts, mask, 0.0)
-
-    xyz = xyz.cpu()
-    mask = mask.cpu()
-    print(mask.sum())
-
-    server = viser.ViserServer()
-
-    def vis():
-        server.add_point_cloud(
-            name="/frustum/pcd",
-            points=xyz.numpy(),
-            colors=np.zeros_like(xyz.numpy()),
-        )
-
-    while True:
-        vis()
-
-        time.sleep(1e-3)
-
-
 def test_gs_culling():
     camera, images, pts, rgb = get_data(config())
     normals, pts = camera.get_frustum(0, 1, 10)
@@ -174,7 +168,7 @@ def test_gs_culling():
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
-    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.0
     mask = torch.zeros(xyz.shape[0], dtype=torch.bool).to("cuda")
     xyz = xyz.to("cuda").to(torch.float32)
     print(xyz.shape)
@@ -206,6 +200,104 @@ def test_gs_culling():
         vis()
 
         time.sleep(1e-3)
+
+
+def test_gs_project():
+    camera, images, pts, rgb = get_data(config())
+    normals, pts = camera.get_frustum(0, 1, 10)
+
+    from gs.renderer import Renderer
+
+    renderer = Renderer()
+    x = torch.linspace(-20, 20, 200)
+    y, z = x.clone(), x.clone()
+    x, y, z = torch.meshgrid(x, y, z)
+    x = x.flatten()
+    y = y.flatten()
+    z = z.flatten()
+    xyz = torch.stack([x, y, z], dim=1)
+
+    N = xyz.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    mask = torch.zeros(xyz.shape[0], dtype=torch.bool).to("cuda")
+    xyz = xyz.to("cuda").to(torch.float32)
+    print(xyz.shape)
+
+    camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+
+    mean, cov, JW = renderer.project_gaussian(xyz, qvec, svec, camera, 0)
+
+    cov_inv = torch.inverse(cov)
+    print(cov[0])
+
+
+def gs_project_sanity_check():
+    camera, images, pts, rgb = get_data(config())
+    normals, pts = camera.get_frustum(0, 1, 10)
+
+    from gs.renderer import Renderer
+
+    renderer = Renderer()
+    x = torch.linspace(-20, 20, 200)
+    y, z = x.clone(), x.clone()
+    x, y, z = torch.meshgrid(x, y, z)
+    x = x.flatten()
+    y = y.flatten()
+    z = z.flatten()
+    xyz = torch.stack([x, y, z], dim=1)
+
+    N = xyz.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    mask = torch.zeros(xyz.shape[0], dtype=torch.bool).to("cuda")
+    xyz = xyz.to("cuda").to(torch.float32)
+    print(xyz.shape)
+
+    camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+    mean, cov, JW = renderer.project_gaussian(xyz, qvec, svec, camera, 0)
+
+    cov_inv = torch.inverse(cov)
+
+    print(cov[0])
+    print(cov_inv[0])
+
+
+def gs_culling_test_on_llff():
+    camera, images, xyz, rgb = get_data(config())
+    normals, pts = camera.get_frustum(1, 0.1, 1000)
+    N = xyz.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    mask = torch.zeros(N, dtype=torch.bool).to("cuda")
+    xyz = torch.from_numpy(xyz)
+    xyz = xyz.to("cuda").to(torch.float32)
+    print(xyz.shape)
+
+    camera = camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+
+    from gs.backend import _backend
+
+    _backend.culling_gaussian_bsphere(xyz, qvec, svec, normals, pts, mask, 3.0)
+
+    xyz = xyz.cpu()
+    mask = mask.cpu()
+    print(mask.sum())
 
 
 if __name__ == "__main__":

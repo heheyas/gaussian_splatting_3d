@@ -6,8 +6,9 @@ from .colmap import read_images, read_cameras, read_pts_from_colmap
 
 """Using OpenCV coordinates"""
 
+
 class PerspectiveCameras:
-    def __init__(self, c2ws, fx, fy, cx, cy, w, h) -> None:
+    def __init__(self, c2ws, fx, fy, cx, cy, w, h, distortion=None) -> None:
         self.c2ws = c2ws
         self.n_cams = self.c2ws.shape[0]
         self.fx, self.fy = fx, fy
@@ -16,9 +17,11 @@ class PerspectiveCameras:
 
         self.yfov = 2 * np.arctan(self.h / (2 * self.fy))
         self.aspect = w / h
+        self.distortion = distortion
 
     def to(self, device):
         self.c2ws = self.c2ws.to(device)
+        self.c2ws = self.c2ws.to(torch.float32)
 
     def get_frustum_pts(self, idx, near_plane, far_plane):
         if idx < 0 or idx >= self.n_cams:
@@ -48,15 +51,19 @@ class PerspectiveCameras:
         corners = []
         for a in [-1, 1]:
             for b in [-1, 1]:
-                corners.append(near_point + a * half_hside * near_plane / far_plane * right + b * half_vside * near_plane / far_plane * up)
+                corners.append(
+                    near_point
+                    + a * half_hside * near_plane / far_plane * right
+                    + b * half_vside * near_plane / far_plane * up
+                )
 
         for a in [-1, 1]:
             for b in [-1, 1]:
                 corners.append(far_point + a * half_hside * right + b * half_vside * up)
 
         return corners
-    
-    # depreatied 
+
+    # depreatied
     # def get_tile_frustum(self, idx, near_plane, far_plane, tile_size=16):
     #     if not tile_size == 16:
     #         raise NotImplementedError
@@ -105,20 +112,24 @@ class PerspectiveCameras:
     def get_all_rays_o(self, idx):
         xp = (torch.arange(0, self.w, dtype=torch.float32) - self.cx) / self.fx
         yp = (torch.arange(0, self.h, dtype=torch.float32) - self.cy) / self.fy
-        
+
         xp, yp = torch.meshgrid(xp, yp, indexing="ij")
         xp = xp.reshape(-1)
         yp = yp.reshape(-1)
         padding = torch.ones_like(xp)
 
         xyz_cam = torch.stack([xp, yp, padding], dim=-1)
-        
+
         rot = self.c2ws[idx][:3, :3]
         t = self.c2ws[idx][:3][3]
 
         xyz_world = t + torch.einsum("ij,bj->bi", rot, xyz_cam)
 
         return xyz_world
+
+    def prepare(self):
+        pixel_size_x = 1.0 / self.fx
+        pixel_size_y = 1.0 / self.fy
 
 
 def get_data(cfg):
@@ -127,7 +138,9 @@ def get_data(cfg):
     image_bin = base / "colmap" / "sparse" / "0" / "images.bin"
     point_bin = base / "colmap" / "sparse" / "0" / "points3D.bin"
     rot, t, images = read_images(image_bin, cfg.image_dir)
-    pts, rgb = read_pts_from_colmap(point_bin,)
+    pts, rgb = read_pts_from_colmap(
+        point_bin,
+    )
     t = np.expand_dims(t, axis=-1)
     camera = read_cameras(cam_bin)
     params = camera.params
@@ -141,9 +154,29 @@ def get_data(cfg):
     cams = None
 
     if camera.model == "OPENCV":
-        cams = PerspectiveCameras(c2ws, float(params[0]), float(params[1]), float(params[2]), float(params[3]), camera.width, camera.height)
+        cams = PerspectiveCameras(
+            c2ws,
+            float(params[0]),
+            float(params[1]),
+            float(params[2]),
+            float(params[3]),
+            camera.width,
+            camera.height,
+        )
+    elif camera.model == "OPENCV_FISHEYE":
+        # TODO: add fisheye camera support
+        cams = PerspectiveCameras(
+            c2ws,
+            float(params[0]),
+            float(params[1]),
+            float(params[2]),
+            float(params[3]),
+            camera.width,
+            camera.height,
+        )
 
     return cams, images, pts, rgb
+
 
 def in_frustum(queries, normal, pts):
     is_in = torch.ones_like(queries[..., 0], dtype=torch.bool)

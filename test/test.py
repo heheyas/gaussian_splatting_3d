@@ -5,6 +5,7 @@ import torch
 import hydra
 from hydra import compose, initialize
 from utils.camera import get_data, in_frustum
+from utils.misc import print_info
 import viser
 import plotly.graph_objects as go
 
@@ -285,19 +286,121 @@ def gs_culling_test_on_llff():
     xyz = xyz.to("cuda").to(torch.float32)
     print(xyz.shape)
 
-    camera = camera.to("cuda")
+    camera.to("cuda")
     normals = normals.to("cuda").to(torch.float32)
     pts = pts.to("cuda").to(torch.float32)
     qvec = qvec.to("cuda")
     svec = svec.to("cuda")
 
-    from gs.backend import _backend
+    import _gs as _backend
 
     _backend.culling_gaussian_bsphere(xyz, qvec, svec, normals, pts, mask, 3.0)
 
-    xyz = xyz.cpu()
+    xyz = xyz.cpu().numpy()
     mask = mask.cpu()
     print(mask.sum())
+    culled_xyz = xyz[mask]
+
+    mask = mask.cpu().numpy()
+    culled_rgb = rgb[mask]
+
+    server = viser.ViserServer()
+    culling = server.add_gui_checkbox("culling", True)
+
+    vis_points = xyz
+    vis_colors = rgb
+    need_update = True
+
+    @culling.on_update
+    def _(_) -> None:
+        nonlocal vis_points, vis_colors, need_update
+        need_update = True
+        if culling.value:
+            vis_points = culled_xyz
+            vis_colors = culled_rgb
+        else:
+            vis_points = xyz
+            vis_colors = rgb
+
+    def vis():
+        server.add_point_cloud(
+            name="/frustum_culling/pcd",
+            points=vis_points,
+            colors=vis_colors,
+        )
+        server.add_camera_frustum(
+            name="/frustum_culling/frustum",
+            aspect=camera.aspect,
+            fov=camera.yfov,
+            position=camera.get_camera_pos(1).cpu().numpy(),
+            wxyz=camera.get_camera_wxyz(1).cpu().numpy(),
+        )
+
+    while True:
+        if need_update:
+            need_update = False
+            server.reset_scene()
+            vis()
+
+        time.sleep(1e-3)
+
+
+def gs_count_tile():
+    from gs.renderer import Renderer
+
+    renderer = Renderer()
+    camera, images, xyz, rgb = get_data(config())
+    normals, pts = camera.get_frustum(0, 0.1, 1000)
+    N = xyz.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    mask = torch.zeros(N, dtype=torch.bool).to("cuda")
+    xyz = torch.from_numpy(xyz)
+    xyz = xyz.to("cuda").to(torch.float32)
+
+    camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+
+    # from gs.backend import _backend
+    import _gs as _backend
+
+    _backend.culling_gaussian_bsphere(xyz, qvec, svec, normals, pts, mask, 3.0)
+    print(mask.sum().item())
+
+    xyz = xyz[mask].contiguous()
+    print(xyz.shape)
+    print(xyz.is_contiguous())
+    qvec = qvec[mask].contiguous()
+    svec = svec[mask].contiguous()
+
+    mean, cov, JW, depth = renderer.project_gaussian(xyz, qvec, svec, camera, 0)
+
+    print_info(mean, "mean")
+    print_info(cov, "cov")
+    print_info(depth, "depth")
+
+    # make sure cov can be diagonalized
+    cov = (cov + cov.transpose(-1, -2)) / 2.0
+    m = (cov[..., 0, 0] + cov[..., 1, 1]) / 2.0
+    p = torch.det(cov)
+    radius = torch.sqrt(m + torch.sqrt((m.pow(2) - p).clamp(min=0.0)))
+    print_info(radius, "radius")
+
+    cov_inv = torch.inverse(cov).contiguous()
+    print_info(cov_inv, "cov_inv")
+
+    # debug_num = 2000
+    # mean = mean[:debug_num].contiguous()
+    # radius = radius[:debug_num].contiguous()
+
+    # renderer.tile_partition(mean, cov_inv, camera, 1.0)
+    renderer.tile_partition_bcircle(mean, radius * 0.1, camera)
+
+    renderer.image_level_radix_sort(mean, cov, radius * 0.1, depth, camera)
 
 
 if __name__ == "__main__":

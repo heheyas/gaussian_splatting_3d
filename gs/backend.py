@@ -1,5 +1,6 @@
 import os
 import torch
+from pathlib import Path
 from torch.utils.cpp_extension import load
 
 _src_path = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,9 @@ elif os.name == "nt":
         os.environ["PATH"] += ";" + cl_path
 
 include_dirs.append(os.path.join(_src_path, "src", "include"))
+include_files = list(
+    map(lambda x: str(x), Path(os.path.join(_src_path, "src", "include")).iterdir())
+)
 
 _backend = load(
     name="_gs",
@@ -56,8 +60,8 @@ _backend = load(
             "bindings.cpp",
         ]
     ],
-    # include_dirs=include_dirs,
     extra_include_paths=include_dirs,
+    verbose=True,
 )
 
 __all__ = ["_backend"]

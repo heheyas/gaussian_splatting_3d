@@ -40,3 +40,9 @@ def qsvec2rotmat_batched(
     rotmat = svec.unsqueeze(-2) * unscaled_rotmat
 
     return rotmat
+
+
+def rotmat2wxyz(rotmat):
+    return kornia.geometry.conversions.rotation_matrix_to_quaternion(
+        rotmat, order=QuaternionCoeffOrder.WXYZ
+    )

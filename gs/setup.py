@@ -21,18 +21,20 @@ if cub_home is None:
         cub_home = prefix + "/include"
 
 include_dirs = torch.utils.cpp_extension.include_paths()
+print(f"cub_home: {cub_home}")
 
-# if cub_home is None:
-#     warnings.warn(
-#         "The environment variable `CUB_HOME` was not found."
-#         "Installation will fail if your system CUDA toolkit version is less than 11."
-#         "NVIDIA CUB can be downloaded "
-#         "from `https://github.com/NVIDIA/cub/releases`. You can unpack "
-#         "it to a location of your choice and set the environment variable "
-#         "`CUB_HOME` to the folder containing the `CMakeListst.txt` file."
-#     )
-# else:
-#     include_dirs.append(os.path.realpath(cub_home).replace("\\ ", " "))
+if cub_home is None:
+    warnings.warn(
+        "The environment variable `CUB_HOME` was not found."
+        "Installation will fail if your system CUDA toolkit version is less than 11."
+        "NVIDIA CUB can be downloaded "
+        "from `https://github.com/NVIDIA/cub/releases`. You can unpack "
+        "it to a location of your choice and set the environment variable "
+        "`CUB_HOME` to the folder containing the `CMakeListst.txt` file."
+    )
+else:
+    # include_dirs.append(os.path.realpath(cub_home).replace("\\ ", " "))
+    pass
 
 if os.name == "posix":
     c_flags = ["-O3", "-std=c++14"]

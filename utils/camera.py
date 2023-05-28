@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from .colmap import read_images, read_cameras, read_pts_from_colmap
+from .misc import print_info
+from .transforms import rotmat2wxyz
 
 """Using OpenCV coordinates"""
 
@@ -131,6 +133,12 @@ class PerspectiveCameras:
         pixel_size_x = 1.0 / self.fx
         pixel_size_y = 1.0 / self.fy
 
+    def get_camera_wxyz(self, idx: int):
+        return rotmat2wxyz(self.c2ws[idx][:3, :3].contiguous())
+
+    def get_camera_pos(self, idx: int):
+        return self.c2ws[idx][:3, 3]
+
 
 def get_data(cfg):
     base = Path(cfg.data_dir)
@@ -174,6 +182,10 @@ def get_data(cfg):
             camera.width,
             camera.height,
         )
+
+    print(
+        f"camera:\n\tfx: {cams.fx}; fy: {cams.fy}\n\tcx: {cams.cx}; cy: {cams.cy}\n\tH: {cams.h}; W: {cams.w}"
+    )
 
     return cams, images, pts, rgb
 

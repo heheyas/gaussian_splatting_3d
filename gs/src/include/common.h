@@ -1,5 +1,13 @@
 #ifndef _COMMON_H
 #define _COMMON_H
+#pragma once
+
+// test
+// #ifdef __CUDACC__
+// #define CUDA_HOSTDEV __host__ __device__
+// #else
+// #define CUDA_HOSTDEV
+// #endif
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -23,14 +31,30 @@
 #define CHECK_IS_INT(x)                                                        \
   TORCH_CHECK(x.scalar_type() == at::ScalarType::Int,                          \
               #x " must be an int tensor")
-// #define CHECK_IS_FLOATING(x)                                                   \
-//   TORCH_CHECK(x.scalar_type() == at::ScalarType::Float ||                      \
-//                   x.scalar_type() == at::ScalarType::Half ||                   \
-//                   x.scalar_type() == at::ScalarType::Double,                   \
-//               #x " must be a floating tensor")
 #define CHECK_IS_FLOATING(x)                                                   \
   TORCH_CHECK(x.scalar_type() == at::ScalarType::Float,                        \
               #x " must be a floating tensor")
+#define CHECK_IS_DOUBLE(x)                                                     \
+  TORCH_CHECK(x.scalar_type() == at::ScalarType::Double,                       \
+              #x " must be a floating tensor")
+
+#define checkLastCudaError(error)                                              \
+  error = cudaGetLastError();                                                  \
+  if (error != cudaSuccess) {                                                  \
+    printf("At line %s file %s:\nCUDA error: %s\n", __LINE__, __FILE__,        \
+           cudaGetErrorString(error));                                         \
+    exit(-1);                                                                  \
+  }
+
+#define cudaCheck(call)                                                        \
+  {                                                                            \
+    const cudaError_t error = call;                                            \
+    if (error != cudaSuccess) {                                                \
+      printf("ERROR: %s:%d,", __FILE__, __LINE__);                             \
+      printf("code:%d, reason:%s\n", error, cudaGetErrorString(error));        \
+      exit(1);                                                                 \
+    }                                                                          \
+  }
 
 using torch::Tensor;
 
@@ -38,7 +62,7 @@ const float EPS = 1e-6;
 const float gs_coeff_3d = 0.06349363593424097f; // 1 / (2 * pi) ** (3/2)
 const float gs_coeff_2d = 0.15915494309189535f; // 1 / (2 * pi)
 
-const int MAX_N_FLOAT_SM = 11000;
+const int MAX_N_FLOAT_SM = 12000; // 48KB
 
 template <typename T>
 __host__ __device__ inline T div_round_up(T val, T divisor) {

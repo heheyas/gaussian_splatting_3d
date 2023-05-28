@@ -109,7 +109,7 @@ __device__ float gaussian_kernel_2d(float2 &mean, float2 *cov_inv,
   float2 tmp = make_float2(dot(query, cov_inv[0]), dot(query, cov_inv[1]));
   float e_tmp = dot(tmp, query) * 0.5f;
 
-  return gs_coeff_2d * __expf(-e_tmp) / det2x2(cov_inv);
+  return gs_coeff_2d * __expf(-e_tmp) * sqrtf(det2x2(cov_inv));
 }
 
 // __device__ void covariance2bbox(float3 &mean, float4 &qvec, float3 &svec,
@@ -178,20 +178,64 @@ __device__ bool intersect_tile_gaussian2d(float2 &topleft, uint32_t tile_size,
   float py = pixel_size_y * tile_size;
   bool gaussian_inside_tile =
       (rela.x >= 0) && (rela.x <= px) && (rela.y >= 0) && (rela.y <= py);
-  if (gaussian_inside_tile)
+  // if (gaussian_inside_tile) {
+  //   // printf("inside tile\n");
+  //   return true;
+  // } else {
+  //   return false;
+  // }
+  if (gaussian_inside_tile) {
+    // printf("inside tile\n");
     return true;
+  }
 
+  float2 pxy = make_float2(px, py);
   // case that the center is not inside the tile
   float2 nearest;
   if (rela.x * (rela.x + px) < 0) {
     nearest.x = rela.x;
   } else {
-    nearest.x = rela.x + (rela.x > 0 ? px : 0);
+    nearest.x = rela.x > 0 ? px : 0;
   }
   if (rela.y * (rela.y + py) < 0) {
     nearest.y = rela.y;
   } else {
-    nearest.y = rela.y + (rela.y > 0 ? py : 0);
+    nearest.y = rela.y > 0 ? py : 0;
   }
+  // printf("gaussian value: %.2f\n", gaussian_kernel_2d(rela, cov_inv,
+  // nearest));
   return gaussian_kernel_2d(rela, cov_inv, nearest) > thresh;
+}
+
+__device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
+                                                  uint32_t tile_size,
+                                                  float pixel_size_x,
+                                                  float pixel_size_y,
+                                                  float2 *mean, float radius) {
+  float2 rela = mean[0] - topleft;
+  float px = pixel_size_x * tile_size;
+  float py = pixel_size_y * tile_size;
+  bool gaussian_inside_tile =
+      (rela.x >= 0) && (rela.x <= px) && (rela.y >= 0) && (rela.y <= py);
+  if (gaussian_inside_tile) {
+    return true;
+  }
+
+  float2 pxy = make_float2(px, py);
+  float2 nearest;
+  if (rela.x * (rela.x + px) < 0) {
+    nearest.x = rela.x;
+  } else {
+    nearest.x = rela.x > 0 ? px : 0;
+  }
+  if (rela.y * (rela.y + py) < 0) {
+    nearest.y = rela.y;
+  } else {
+    nearest.y = rela.y > 0 ? py : 0;
+  }
+  // printf("gaussian value: %.2f\n", gaussian_kernel_2d(rela, cov_inv,
+  // nearest));
+  float R = sqrtf(dot(rela - nearest, rela - nearest));
+  // printf("R: %.2f; radius: %.2f\n", R, radius);
+  return dot(rela - nearest, rela - nearest) < radius * radius;
 }

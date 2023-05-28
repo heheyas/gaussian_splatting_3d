@@ -147,3 +147,8 @@ def viser_vis_colmap(
             visualize_colmap()
 
         time.sleep(1e-3)
+
+
+class ViserGUI:
+    def __init__(self) -> None:
+        pass

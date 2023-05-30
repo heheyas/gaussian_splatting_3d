@@ -345,16 +345,94 @@ def gs_culling_test_on_llff():
         time.sleep(1e-3)
 
 
+def draw_2ds():
+    from gs.renderer import Renderer
+
+    renderer = Renderer()
+    camera, images, xyz, rgb = get_data(config())
+    normals, pts = camera.get_frustum(0, 1.5, 1000)
+    N = xyz.shape[0]
+    qvec = torch.zeros([N, 4], dtype=torch.float32)
+    qvec[..., 0] = 1.0
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.02
+    mask = torch.zeros(N, dtype=torch.bool).to("cuda")
+    xyz = torch.from_numpy(xyz)
+    xyz = xyz.to("cuda").to(torch.float32)
+
+    camera.to("cuda")
+    normals = normals.to("cuda").to(torch.float32)
+    pts = pts.to("cuda").to(torch.float32)
+    qvec = qvec.to("cuda")
+    svec = svec.to("cuda")
+
+    # from gs.backend import _backend
+    import _gs as _backend
+
+    _backend.culling_gaussian_bsphere(xyz, qvec, svec, normals, pts, mask, 3.0)
+    print(mask.sum().item())
+
+    xyz = xyz[mask].contiguous()
+    print(xyz.shape)
+    print(xyz.is_contiguous())
+    qvec = qvec[mask].contiguous()
+    svec = svec[mask].contiguous()
+
+    mean, cov, JW, depth = renderer.project_gaussian(xyz, qvec, svec, camera, 0)
+
+    print_info(mean, "mean")
+    print_info(cov, "cov")
+    print_info(depth, "depth")
+
+    # make sure cov can be diagonalized
+    cov = (cov + cov.transpose(-1, -2)) / 2.0
+    m = (cov[..., 0, 0] + cov[..., 1, 1]) / 2.0
+    p = torch.det(cov)
+    radius = torch.sqrt(m + torch.sqrt((m.pow(2) - p).clamp(min=0.0)))
+
+    from utils.vis.basic import draw_2d_circles, draw_heatmap_of_num_gaussians_per_tile
+
+    H, W = camera.h, camera.w
+    pixel_size_x = 1.0 / camera.fx
+    pixel_size_y = 1.0 / camera.fy
+    cx, cy = camera.cx, camera.cy
+
+    draw_2d_circles(
+        "test_draw_2d_circles",
+        mean,
+        radius * 10,
+        depth,
+        rgb,
+        pixel_size_x,
+        pixel_size_y,
+        cx,
+        cy,
+        H,
+        W,
+    )
+
+    renderer.tile_partition_bcircle(mean, radius * 1.0, camera)
+
+    draw_heatmap_of_num_gaussians_per_tile(
+        "test_draw_heatmap_of_num_gaussians_per_tile",
+        renderer.tile_size,
+        renderer.num_gaussians,
+        renderer.n_tiles_h,
+        renderer.n_tiles_w,
+        H,
+        W,
+    )
+
+
 def gs_count_tile():
     from gs.renderer import Renderer
 
     renderer = Renderer()
     camera, images, xyz, rgb = get_data(config())
-    normals, pts = camera.get_frustum(0, 0.1, 1000)
+    normals, pts = camera.get_frustum(0, 1.5, 1000)
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
-    svec = torch.ones([N, 3], dtype=torch.float32) * 0.03
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.02
     mask = torch.zeros(N, dtype=torch.bool).to("cuda")
     xyz = torch.from_numpy(xyz)
     xyz = xyz.to("cuda").to(torch.float32)
@@ -396,7 +474,7 @@ def gs_count_tile():
     # renderer.tile_partition(mean, cov_inv, camera, 1.0)
     color = torch.from_numpy(rgb).to("cuda").to(torch.float32)[mask]
     print_info(color, "color")
-    color = torch.zeros_like(color)
+    # color = torch.zeros_like(color)
     renderer.tile_partition_bcircle(mean, radius * 1.0, camera)
 
     renderer.image_level_radix_sort(mean, cov, radius * 1.0, depth, color, camera)

@@ -131,6 +131,8 @@ class Renderer:
         print(f"H: {H} and W: {W}")
         n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
         n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        self.n_tiles_h = n_tiles_h
+        self.n_tiles_w = n_tiles_w
         n_tiles = n_tiles_h * n_tiles_w
 
         print(f"n_tiles_h: {n_tiles_h} and n_tiles_w: {n_tiles_w}")

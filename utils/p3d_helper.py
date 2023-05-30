@@ -108,7 +108,7 @@ def render_pcd(
         compositor=AlphaCompositor(background_color=(0, 0, 0)),
     )
 
-    image = renderer(pcd).cpu().squeeze().moveaxis(-1, 0).numpy()
+    image = renderer(pcd).cpu().squeeze().moveaxis(-1, 0).numpy()[:, ::-1, ::-1]
 
     print(image.max())
     print(image.min())

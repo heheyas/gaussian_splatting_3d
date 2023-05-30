@@ -62,19 +62,23 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
 
   for (int i = 0; i < N_gaussians_this_time; ++i) {
     if (cum_alpha_this_time < thresh) {
-      return;
+      break;
     }
     // TODO: add gaussian kernel here
     // float coeff = alpha[i] * cum_alpha_this_time * gaussian_kernel_2d();
-    if (threadIdx.x == 0) {
-      printf("color0: %f, color1: %f, color2: %f\n", color[3 * i + 0],
-             color[3 * i + 1], color[3 * i + 2]);
-    }
+    // if (threadIdx.x == 0) {
+    //   printf("color0: %f, color1: %f, color2: %f\n", color[3 * i + 0],
+    //          color[3 * i + 1], color[3 * i + 2]);
+    // }
     float coeff = alpha[i] * cum_alpha_this_time;
     // check bank conflict here
     color_this_time[0] += color[3 * i + 0] * coeff;
     color_this_time[1] += color[3 * i + 1] * coeff;
     color_this_time[2] += color[3 * i + 2] * coeff;
+    if (threadIdx.x == 0) {
+      printf("color0: %f, color1: %f, color2: %f\n", color_this_time[0],
+             color_this_time[1], color_this_time[2]);
+    }
     cum_alpha_this_time *= (1 - alpha[i]);
   }
 

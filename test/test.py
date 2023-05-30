@@ -354,7 +354,7 @@ def gs_count_tile():
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
-    svec = torch.ones([N, 3], dtype=torch.float32) * 0.1
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.03
     mask = torch.zeros(N, dtype=torch.bool).to("cuda")
     xyz = torch.from_numpy(xyz)
     xyz = xyz.to("cuda").to(torch.float32)
@@ -393,14 +393,20 @@ def gs_count_tile():
     cov_inv = torch.inverse(cov).contiguous()
     print_info(cov_inv, "cov_inv")
 
-    # debug_num = 2000
-    # mean = mean[:debug_num].contiguous()
-    # radius = radius[:debug_num].contiguous()
-
     # renderer.tile_partition(mean, cov_inv, camera, 1.0)
-    renderer.tile_partition_bcircle(mean, radius * 0.1, camera)
+    color = torch.from_numpy(rgb).to("cuda").to(torch.float32)[mask]
+    print_info(color, "color")
+    color = torch.zeros_like(color)
+    renderer.tile_partition_bcircle(mean, radius * 1.0, camera)
 
-    renderer.image_level_radix_sort(mean, cov, radius * 0.1, depth, camera)
+    renderer.image_level_radix_sort(mean, cov, radius * 1.0, depth, color, camera)
+
+
+def test_pytorch3d_cameras():
+    from utils import p3d_helper
+
+    cameras, images, xyz, rgb = p3d_helper.get_data(config())
+    p3d_helper.render_pcd(cameras, xyz, rgb, 0, radius=0.03)
 
 
 if __name__ == "__main__":

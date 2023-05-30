@@ -156,6 +156,8 @@ def get_data(cfg):
     # print(t.shape)
     # print(images.shape)
 
+    rot = rot.transpose(0, 2, 1)
+    t = -rot @ t
     c2ws = np.concatenate([rot, t], axis=2)
     c2ws = torch.from_numpy(c2ws)
 

@@ -225,14 +225,15 @@ __global__ void fill_tiledepth_bsphere_kernel_sm(
                                           pixel_size_y, mean_ + i,
                                           g_radius[i])) {
       cnt += 1;
-      tile_ids[2 * off] = global_id;
-      tile_depths[2 * off + 1] = depth[N_base + i];
+      // tile_ids[2 * off] = global_id;
+      // tile_depths[2 * off + 1] = depth[N_base + i];
+      tile_ids[2 * off + 1] = global_id;
+      tile_depths[2 * off] = depth[N_base + i];
       off += 1;
       gaussian_ids[off] = N_base + i;
     }
   }
   tile_n_gaussians[global_id] += cnt;
-  // atomicAdd(tile_n_gaussians + global_id, cnt);
 }
 
 void fill_tiledepth_bsphere_cuda(uint32_t N, int *gaussian_ids,
@@ -310,6 +311,33 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   cudaCheck(cub::DeviceRadixSort::SortPairs(
       d_temp_storage, temp_storage_bytes, keys, sorted_keys,
       unsorted_gaussian_ids, gaussian_ids, N_with_dub));
+
+  // printf("N_with_dub: %d\n", N_with_dub);
+  // fflush(stdout);
+
+  // int64_t *keys_h = (int64_t *)malloc(N_with_dub * sizeof(int64_t));
+  // cudaCheck(cudaMemcpy(keys_h, keys, N_with_dub * sizeof(int64_t),
+  //                      cudaMemcpyDeviceToHost));
+  // int *tiles_ids_h = reinterpret_cast<int *>(keys_h);
+  // for (int i = 0; i < N_with_dub; ++i) {
+  //   printf("sorted[%d]: %d\n", i, tiles_ids_h[2 * i + 1]);
+  // }
+
+  // int64_t *sorted_keys_h = (int64_t *)malloc(N_with_dub * sizeof(int64_t));
+  // int *offset_h = (int *)malloc(n_tiles * sizeof(int));
+  // cudaCheck(cudaMemcpy(sorted_keys_h, sorted_keys, N_with_dub * sizeof(int64_t),
+  //                      cudaMemcpyDeviceToHost));
+  // cudaCheck(cudaMemcpy(offset_h, offset, n_tiles * sizeof(int),
+  //                      cudaMemcpyDeviceToHost));
+  // // int *sorted_gaussian_ids = reinterpret_cast<int *>(sorted_keys);
+
+  // int *sorted_keys_h_ids = reinterpret_cast<int *>(sorted_keys_h);
+  // // for (int i = 0; i < 100; ++i) {
+  // //   printf("tile_id[%d]: %d\n", i, sorted_keys_h_ids[offset_h[i] * 2]);
+  // // }
+  // for (int i = 0; i < n_tiles; ++i) {
+  //   printf("tile[%d]: %d\n", i, sorted_keys_h_ids[2 * offset_h[i] + 1]);
+  // }
 
   return;
 }

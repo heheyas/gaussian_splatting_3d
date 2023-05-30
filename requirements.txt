@@ -3,3 +3,5 @@ numpy
 torchtyping
 hydra-core
 kornia
+visdom
+pytorch3d

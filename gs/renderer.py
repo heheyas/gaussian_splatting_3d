@@ -177,7 +177,7 @@ class Renderer:
         print_info(num_gaussians, "num_gaussians")
 
     def image_level_radix_sort(
-        self, mean, cov, radius, depth, camera: PerspectiveCameras
+        self, mean, cov, radius, depth, color, camera: PerspectiveCameras
     ):
         print("=" * 10, "image_level_radix_sort", "=" * 10)
         H, W = camera.h, camera.w
@@ -202,7 +202,7 @@ class Renderer:
 
         pixel_size_x = 1.0 / camera.fx
         pixel_size_y = 1.0 / camera.fy
-        self.offset = torch.zeros(mean.shape[0] + 1, dtype=torch.int32, device="cuda")
+        self.offset = torch.zeros(n_tiles + 1, dtype=torch.int32, device="cuda")
         print_info(self.offset, "offset")
         print_info(self.num_gaussians, "num_gaussians")
         print_info(self.tiledepth, "tiledepth")
@@ -229,6 +229,7 @@ class Renderer:
             pixel_size_y,
         )
         toc()
+        self.offset[-1] = self.total_gaussians
 
         print_info(self.offset, "offset")
         print_info(self.num_gaussians, "num_gaussians")
@@ -241,14 +242,23 @@ class Renderer:
 
         print_info(self.tiledepth, "tiledepth")
         print_info(gaussian_ids, "gaussian_ids")
+        print_info(self.offset, "offset")
+        diff = self.offset[1:] - self.offset[:-1]
+        print_info(diff, "diff")
 
         out = torch.zeros([H * W * 3], dtype=torch.float32, device="cuda")
-        color = torch.ones(
-            [self.total_gaussians, 3], dtype=torch.float32, device="cuda"
+        # color = torch.ones(
+        #     [self.total_gaussians, 3], dtype=torch.float32, device="cuda"
+        # )
+        alpha = (
+            torch.ones([self.total_gaussians], dtype=torch.float32, device="cuda") * 1.0
         )
-        alpha = torch.ones([self.total_gaussians], dtype=torch.float32, device="cuda")
+
+        print(self.offset[:100])
+        print(gaussian_ids[:100])
 
         thresh = 0.01
+        tic()
         _backend.tile_based_vol_rendering(
             mean,
             cov,
@@ -267,7 +277,11 @@ class Renderer:
             W,
             thresh,
         )
+        toc()
         fig, ax = plt.subplots()
+        print_info(out, "out")
+        print(out.mean())
+        print(out.std())
         ax.imshow(out.reshape(H, W, 3).cpu().numpy())
         plt.show()
         fig.savefig("out.png")

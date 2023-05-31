@@ -1,0 +1,1 @@
+- [ ] why the rendered image is a shit

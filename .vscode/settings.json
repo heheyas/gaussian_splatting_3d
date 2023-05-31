@@ -4,7 +4,12 @@
         "*.cu": "cpp",
         "cstdint": "cpp",
         "cmath": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "type_traits": "cpp",
+        "memory": "cpp",
+        "utility": "cpp",
+        "random": "cpp",
+        "__locale": "cpp"
     },
     "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs"
 }

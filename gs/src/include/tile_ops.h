@@ -245,6 +245,19 @@ void fill_tiledepth_bsphere_cuda(uint32_t N, int *gaussian_ids,
                                  float pixel_size_y) {
   // this function will reset the value of tile_n_gaussians, but should be
   // identical to the previous one
+  /* test kenerl vals */
+  // float2 mean_ = make_float2(0, 0);
+  // float4 cov_ = make_float4(1, 0, 0, 1);
+  // float2 query = make_float2(0, 0);
+  // float2 xy = query - mean_;
+  // float2 tmp =
+  //     make_float2(xy.x * cov_.x + xy.y * cov_.y, xy.x * cov_.z + xy.y *
+  //     cov_.w);
+  // float radial = dot(tmp, xy);
+  // printf("radial: %.2f\n", radial);
+  // float kernel_val = kernel_gaussian_2d(mean_, cov_, query);
+  // printf("kernel val: %f\n", kernel_val);
+  // fflush(stdout);
   printf("fill_tiledepth_bsphere_cuda\n");
   int n_tiles = n_tiles_h * n_tiles_w;
   cudaCheck(cudaMemset(tile_n_gaussians, 0, n_tiles * sizeof(int)));
@@ -325,7 +338,8 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
 
   // int64_t *sorted_keys_h = (int64_t *)malloc(N_with_dub * sizeof(int64_t));
   // int *offset_h = (int *)malloc(n_tiles * sizeof(int));
-  // cudaCheck(cudaMemcpy(sorted_keys_h, sorted_keys, N_with_dub * sizeof(int64_t),
+  // cudaCheck(cudaMemcpy(sorted_keys_h, sorted_keys, N_with_dub *
+  // sizeof(int64_t),
   //                      cudaMemcpyDeviceToHost));
   // cudaCheck(cudaMemcpy(offset_h, offset, n_tiles * sizeof(int),
   //                      cudaMemcpyDeviceToHost));

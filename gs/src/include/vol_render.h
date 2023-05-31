@@ -17,12 +17,12 @@ __device__ inline void carry(uint32_t N, uint32_t dsize, float *sm, float *gm,
   int n_left = (dsize * N) % blockDim.x;
   for (int i = 0; i < n_turns; i++) {
     sm[local_id + i * blockDim.x] =
-        gm[gaussian_ids[(local_id + i * blockDim.x) / dsize] +
+        gm[dsize * gaussian_ids[(local_id + i * blockDim.x) / dsize] +
            ((local_id + i * blockDim.x) % dsize)];
   }
   if (local_id < n_left) {
     sm[local_id + n_turns * blockDim.x] =
-        gm[gaussian_ids[(local_id + n_turns * blockDim.x) / dsize] +
+        gm[dsize * gaussian_ids[(local_id + n_turns * blockDim.x) / dsize] +
            ((local_id + n_turns * blockDim.x) % dsize)];
   }
 }
@@ -40,11 +40,14 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
   int global_y = blockIdx.y * tile_size + local_y;
   int global_x = blockIdx.x * tile_size + local_x;
   if (global_y >= H || global_x >= W) {
-    printf("holy shit\n");
     return;
   }
   float color_this_time[3];
   float cum_alpha_this_time;
+
+  float pos[2] = {topleft[0] + global_x * pixel_size_x,
+                  topleft[1] + global_y * pixel_size_y};
+
   if (first) {
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
@@ -66,20 +69,85 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
     }
     // TODO: add gaussian kernel here
     // float coeff = alpha[i] * cum_alpha_this_time * gaussian_kernel_2d();
-    // if (threadIdx.x == 0) {
-    //   printf("color0: %f, color1: %f, color2: %f\n", color[3 * i + 0],
-    //          color[3 * i + 1], color[3 * i + 2]);
-    // }
     float coeff = alpha[i] * cum_alpha_this_time;
+    coeff *= kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
+    if (threadIdx.x == 0) {
+      printf("coeff: %f\n", kernel_gaussian_2d(mean, cov, pos));
+    }
+    // printf("test: %f\n", test);
+    // coeff *= test;
+    // float coeff = alpha[i] * cum_alpha_this_time * expf(-0.5f * radial);
+    // float coeff = alpha[i] * cum_alpha_this_time *
+    //               kernel_gaussian_2d(mean_[i], cov_[i], pos);
     // check bank conflict here
     color_this_time[0] += color[3 * i + 0] * coeff;
     color_this_time[1] += color[3 * i + 1] * coeff;
     color_this_time[2] += color[3 * i + 2] * coeff;
-    if (threadIdx.x == 0) {
-      printf("color0: %f, color1: %f, color2: %f\n", color_this_time[0],
-             color_this_time[1], color_this_time[2]);
-    }
     cum_alpha_this_time *= (1 - alpha[i]);
+  }
+
+#pragma unroll
+  for (int i = 0; i < 3; ++i) {
+    out[3 * local_id + i] = color_this_time[i];
+  }
+  cum_alpha[local_id] = cum_alpha_this_time;
+}
+
+__device__ void vol_render_one_batch_backward(
+    uint32_t N_gaussians_this_time, float *mean, float *cov, float *color,
+    float *alpha, float *grad_mean, float *grad_cov, float *grad_color,
+    float *grad_alpha, float *grad_out, float *out, float *cum_alpha,
+    float *topleft, uint32_t tile_size, uint32_t n_tiles_h, uint32_t n_tiles_w,
+    float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t W,
+    float thresh, bool first) {
+  int local_id = threadIdx.x;
+  // check row major here
+  int local_y = local_id / tile_size;
+  int local_x = local_id % tile_size;
+  int global_y = blockIdx.y * tile_size + local_y;
+  int global_x = blockIdx.x * tile_size + local_x;
+  if (global_y >= H || global_x >= W) {
+    return;
+  }
+  float color_this_time[3];
+  float cum_alpha_this_time;
+
+  float pos[2] = {topleft[0] + global_x * pixel_size_x,
+                  topleft[1] + global_y * pixel_size_y};
+
+  if (first) {
+#pragma unroll
+    for (int i = 0; i < 3; ++i) {
+      color_this_time[i] = 0.0f;
+    }
+    cum_alpha_this_time = 1.0f;
+  } else {
+#pragma unroll
+    for (int i = 0; i < 3; ++i) {
+      // check bank conflict here
+      color_this_time[i] = out[3 * local_id + i];
+    }
+    cum_alpha_this_time = cum_alpha[local_id];
+  }
+
+  for (int i = 0; i < N_gaussians_this_time; ++i) {
+    if (cum_alpha_this_time < thresh) {
+      break;
+    }
+    float coeff = alpha[i] * cum_alpha_this_time;
+    coeff *= kernel_gaussian_2d(mean, cov, pos);
+    if (threadIdx.x == 0) {
+      printf("coeff: %f\n", kernel_gaussian_2d(mean, cov, pos));
+    }
+    color_this_time[0] += color[3 * i + 0] * coeff;
+    color_this_time[1] += color[3 * i + 1] * coeff;
+    color_this_time[2] += color[3 * i + 2] * coeff;
+    cum_alpha_this_time *= (1 - alpha[i]);
+    kernel_gaussian_2d_backward(mean, cov, pos, grad_mean, grad_cov,
+                                (grad_out[3 * local_id] +
+                                 grad_out[3 * local_id + 1] +
+                                 grad_out[3 * local_id + 2]) *
+                                    alpha[i] * cum_alpha_this_time);
   }
 
 #pragma unroll
@@ -96,15 +164,11 @@ __global__ void tile_based_vol_rendering_entry(
     float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t W,
     float thresh) {
   int local_id = threadIdx.x;
-  // check row major here
   int local_y = local_id / tile_size;
   int local_x = local_id % tile_size;
-  // here is some problem
-  int tile_id = blockIdx.x * gridDim.y + blockIdx.y;
+  int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
   int n_gaussians_this_tile = offset[tile_id + 1] - offset[tile_id];
   if (n_gaussians_this_tile == 0) {
-    if (threadIdx.x == 0)
-      printf("no gaussians this tile\n");
     return;
   }
 
@@ -117,27 +181,19 @@ __global__ void tile_based_vol_rendering_entry(
   int max_gaussian_sm =
       (MAX_N_FLOAT_SM - n_float_per_pixel * n_pixel_per_tile) /
       n_float_per_gaussian;
-  __shared__ float sm[MAX_N_FLOAT_SM];
+  __shared__ __align__(4) float sm[MAX_N_FLOAT_SM];
   float *sm_mean = sm;
   float *sm_cov = sm_mean + 2 * max_gaussian_sm;
   float *sm_color = sm_cov + 4 * max_gaussian_sm;
   float *sm_alpha = sm_color + 3 * max_gaussian_sm;
-  float *sm_cum_alpha = sm_alpha + 1 * n_pixel_per_tile;
-  float *sm_out = sm_cum_alpha + 3 * n_pixel_per_tile;
+  float *sm_cum_alpha = sm_alpha + 1 * max_gaussian_sm;
+  float *sm_out = sm_cum_alpha + 1 * n_pixel_per_tile;
 
   gaussian_ids += offset[tile_id];
 
   for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
-    // mean += n * 2;
-    // cov += n * 4;
-    // color += n * 3;
-    // alpha += n * 1;
     gaussian_ids += n;
     int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
-    // if (threadIdx.x == 0) {
-    //   printf("num_gaussian_this_tile: %d\n", n_gaussians_this_tile);
-    //   printf("num_gaussian_sm: %d\n", num_gaussian_sm);
-    // }
     carry(num_gaussian_sm, 2, sm_mean, mean, offset, gaussian_ids);
     carry(num_gaussian_sm, 4, sm_cov, cov, offset, gaussian_ids);
     carry(num_gaussian_sm, 3, sm_color, color, offset, gaussian_ids);
@@ -157,9 +213,8 @@ __global__ void tile_based_vol_rendering_entry(
   out_rgb[3 * (global_y * W + global_x) + 0] = sm_out[3 * local_id + 0];
   out_rgb[3 * (global_y * W + global_x) + 1] = sm_out[3 * local_id + 1];
   out_rgb[3 * (global_y * W + global_x) + 2] = sm_out[3 * local_id + 2];
-  // if (sm_out[3 * local_id] > 0.0f) {
-  //   printf("sm_out[3 * local_id: %d]: %f\n", local_id, sm_out[3 * local_id]);
-  // }
+
+  /* test kernel 2d */
 }
 
 // TODO: add backward compatibility
@@ -178,4 +233,5 @@ void tile_based_vol_rendering_cuda(uint32_t N, uint32_t N_with_dub, float *mean,
       N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
       topleft, tile_size, n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
       W, thresh);
+  fflush(stdout);
 }

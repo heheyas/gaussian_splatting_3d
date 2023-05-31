@@ -1,3 +1,4 @@
+import cv2
 from utils.camera import PerspectiveCameras
 from utils.transforms import qsvec2rotmat_batched
 from utils.misc import print_info, tic, toc
@@ -258,12 +259,14 @@ class Renderer:
 
         print(self.offset[:100])
         print(gaussian_ids[:100])
+        self.gaussian_ids = gaussian_ids
 
         thresh = 0.01
         tic()
         _backend.tile_based_vol_rendering(
             mean,
-            cov,
+            # cov,
+            torch.inverse(cov).contiguous(),
             color,
             alpha,
             self.offset,
@@ -280,13 +283,19 @@ class Renderer:
             thresh,
         )
         toc()
-        fig, ax = plt.subplots()
+        # fig, ax = plt.subplots()
         print_info(out, "out")
         print(out.mean())
         print(out.std())
-        ax.imshow(out.reshape(H, W, 3).cpu().numpy())
-        plt.show()
-        fig.savefig("out.png")
+        # ax.imshow(out.reshape(H, W, 3).cpu().numpy())
+        # plt.show()
+        # fig.savefig("out.png")
+
+        img = (out.reshape(H, W, 3).cpu().numpy() * 255.0).astype(np.uint8)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        cv2.imwrite("tmp/forward_out.png", img)
+
+        return out
 
     def render_loop(self):
         pass

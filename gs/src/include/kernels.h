@@ -239,3 +239,41 @@ __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
   // printf("R: %.2f; radius: %.2f\n", R, radius);
   return dot(rela - nearest, rela - nearest) < radius * radius;
 }
+
+__host__ __device__ inline float kernel_gaussian_2d(float2 &mean, float4 &cov,
+                                                    float2 &query) {
+  float2 xy = query - mean;
+  float2 tmp =
+      make_float2(xy.x * cov.x + xy.y * cov.y, xy.x * cov.z + xy.y * cov.w);
+  float radial = dot(tmp, xy);
+  return expf(-0.5f * radial);
+  // return 1.0f;
+}
+
+__host__ __device__ inline float kernel_gaussian_2d(float *mean, float *cov,
+                                                    float *query) {
+  float det = cov[0] * cov[3] - cov[1] * cov[2];
+  float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
+  float2 tmp =
+      make_float2(x.x * cov[4] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]);
+  float radial = dot(tmp, x) / det;
+  return expf(-0.5f * radial);
+  // return 1.0f;
+}
+
+__device__ inline void
+kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
+                            float *grad_mean, float *grad_cov, float grad) {
+  float det = cov[0] * cov[3] - cov[1] * cov[2];
+  float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
+  float2 tmp =
+      make_float2(x.x * cov[4] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]);
+  float val = expf(-0.5f * dot(tmp, x) / det);
+  // no atomic ops here
+  atomicAdd(grad_mean, grad * val * tmp.x / det);
+  atomicAdd(grad_mean + 1, grad * val * tmp.y / det);
+  atomicAdd(grad_cov, -grad * x.y * x.y * val / det);
+  atomicAdd(grad_cov + 1, grad * x.x * x.y * val / det);
+  atomicAdd(grad_cov + 2, grad * x.x * x.y * val / det);
+  atomicAdd(grad_cov + 3, -grad * x.x * x.x * val / det);
+}

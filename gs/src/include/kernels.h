@@ -169,42 +169,72 @@ __device__ bool intersect_sphere_frustum(float3 &query, float radius,
   return true;
 }
 
+__host__ __device__ inline float kernel_gaussian_2d(float *mean, float *cov,
+                                                    float *query) {
+  double c0 = (double)cov[0];
+  double c1 = (double)cov[1];
+  double c2 = (double)cov[2];
+  double c3 = (double)cov[3];
+  double det = c0 * c3 - c1 * c2;
+  double x = query[0] - mean[0];
+  double y = query[1] - mean[1];
+  double tmpx = x * c3 - y * c2;
+  double tmpy = -x * c1 + y * c0;
+  double radial = tmpx * x + tmpy * y;
+  radial /= det;
+  float val = (float)exp(-0.5 * radial);
+  assert(val <= 1.0f && val >= 0.0f);
+
+  return val;
+  // float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
+  // float2 tmp =
+  //     make_float2(x.x * cov[3] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]);
+  // float radial = dot(tmp, x) / det;
+  // if (radial > 0)
+  //   return expf(-0.5f * radial);
+  // else
+  //   return 0.0f;
+}
+
+__host__ __device__ inline float
+kernel_gaussian_2d(float *mean, float *cov, float query_x, float query_y) {
+  double c0 = (double)cov[0];
+  double c1 = (double)cov[1];
+  double c2 = (double)cov[2];
+  double c3 = (double)cov[3];
+  double det = c0 * c3 - c1 * c2;
+  double x = query_x - mean[0];
+  double y = query_y - mean[1];
+  double tmpx = x * c3 - y * c2;
+  double tmpy = -x * c1 + y * c0;
+  double radial = tmpx * x + tmpy * y;
+  radial /= det;
+
+  float val = (float)exp(-0.5 * radial);
+  assert(val <= 1.0f && val >= 0.0f);
+
+  return val;
+}
+
 __device__ bool intersect_tile_gaussian2d(float2 &topleft, uint32_t tile_size,
                                           float pixel_size_x,
-                                          float pixel_size_y, float2 *mean,
-                                          float2 *cov_inv, float thresh) {
-  float2 rela = mean[0] - topleft;
-  float px = pixel_size_x * tile_size;
-  float py = pixel_size_y * tile_size;
-  bool gaussian_inside_tile =
-      (rela.x >= 0) && (rela.x <= px) && (rela.y >= 0) && (rela.y <= py);
-  // if (gaussian_inside_tile) {
-  //   // printf("inside tile\n");
-  //   return true;
-  // } else {
-  //   return false;
-  // }
-  if (gaussian_inside_tile) {
-    // printf("inside tile\n");
-    return true;
-  }
+                                          float pixel_size_y, float *mean,
+                                          float *cov, float thresh) {
 
-  float2 pxy = make_float2(px, py);
-  // case that the center is not inside the tile
-  float2 nearest;
-  if (rela.x * (rela.x + px) < 0) {
-    nearest.x = rela.x;
-  } else {
-    nearest.x = rela.x > 0 ? px : 0;
-  }
-  if (rela.y * (rela.y + py) < 0) {
-    nearest.y = rela.y;
-  } else {
-    nearest.y = rela.y > 0 ? py : 0;
-  }
-  // printf("gaussian value: %.2f\n", gaussian_kernel_2d(rela, cov_inv,
-  // nearest));
-  return gaussian_kernel_2d(rela, cov_inv, nearest) > thresh;
+  float max_val = 0.0f;
+  max_val = fmaxf(max_val, kernel_gaussian_2d(mean, cov, topleft.x, topleft.y));
+  max_val = fmaxf(
+      max_val, kernel_gaussian_2d(
+                   mean, cov, topleft.x + tile_size * pixel_size_x, topleft.y));
+  max_val =
+      fmaxf(max_val, kernel_gaussian_2d(mean, cov, topleft.x,
+                                        topleft.y + tile_size * pixel_size_y));
+  max_val =
+      fmaxf(max_val,
+            kernel_gaussian_2d(mean, cov, topleft.x + tile_size * pixel_size_x,
+                               topleft.y + tile_size * pixel_size_y));
+
+  return max_val > thresh;
 }
 
 __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
@@ -240,26 +270,16 @@ __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
   return dot(rela - nearest, rela - nearest) < radius * radius;
 }
 
-__host__ __device__ inline float kernel_gaussian_2d(float2 &mean, float4 &cov,
-                                                    float2 &query) {
-  float2 xy = query - mean;
-  float2 tmp =
-      make_float2(xy.x * cov.x + xy.y * cov.y, xy.x * cov.z + xy.y * cov.w);
-  float radial = dot(tmp, xy);
-  return expf(-0.5f * radial);
-  // return 1.0f;
-}
-
-__host__ __device__ inline float kernel_gaussian_2d(float *mean, float *cov,
-                                                    float *query) {
-  float det = cov[0] * cov[3] - cov[1] * cov[2];
-  float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
-  float2 tmp =
-      make_float2(x.x * cov[4] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]);
-  float radial = dot(tmp, x) / det;
-  return expf(-0.5f * radial);
-  // return 1.0f;
-}
+// __host__ __device__ inline float kernel_gaussian_2d(float2 &mean, float4
+// &cov,
+//                                                     float2 &query) {
+//   float2 xy = query - mean;
+//   float2 tmp =
+//       make_float2(xy.x * cov.x + xy.y * cov.y, xy.x * cov.z + xy.y * cov.w);
+//   float radial = dot(tmp, xy);
+//   return expf(-0.5f * radial);
+//   // return 1.0f;
+// }
 
 __device__ inline void
 kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
@@ -267,13 +287,16 @@ kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
   float det = cov[0] * cov[3] - cov[1] * cov[2];
   float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
   float2 tmp =
-      make_float2(x.x * cov[4] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]);
-  float val = expf(-0.5f * dot(tmp, x) / det);
-  // no atomic ops here
-  atomicAdd(grad_mean, grad * val * tmp.x / det);
-  atomicAdd(grad_mean + 1, grad * val * tmp.y / det);
-  atomicAdd(grad_cov, -grad * x.y * x.y * val / det);
-  atomicAdd(grad_cov + 1, grad * x.x * x.y * val / det);
-  atomicAdd(grad_cov + 2, grad * x.x * x.y * val / det);
-  atomicAdd(grad_cov + 3, -grad * x.x * x.x * val / det);
+      make_float2(x.x * cov[3] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]) /
+      det;
+  // float val = expf(-0.5f * dot(tmp, x));
+  float val = 1.0f;
+  // note: val has been multiplied in the grad
+  // atomic ops here
+  atomicAdd(grad_mean, grad * val * tmp.x);
+  atomicAdd(grad_mean + 1, grad * val * tmp.y);
+  atomicAdd(grad_cov, 0.5f * grad * val * tmp.x * tmp.x);
+  atomicAdd(grad_cov + 1, 0.5f * grad * val * tmp.x * tmp.y);
+  atomicAdd(grad_cov + 2, 0.5f * grad * val * tmp.y * tmp.x);
+  atomicAdd(grad_cov + 3, 0.5f * grad * val * tmp.y * tmp.y);
 }

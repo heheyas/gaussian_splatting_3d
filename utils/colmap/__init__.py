@@ -1,15 +1,17 @@
 import cv2
 import numpy as np
 from pathlib import Path
+from tqdm import tqdm
 from .read import read_points3D_binary, read_cameras_binary, read_images_binary
+
 
 def read_one_image(filename):
     filename = str(filename)
     img = cv2.imread(filename)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = img.astype(np.float32) / 255.
-    
+
     return img
+
 
 def read_pts_from_colmap(filename, verbose=True):
     if not isinstance(filename, str):
@@ -24,7 +26,7 @@ def read_pts_from_colmap(filename, verbose=True):
     if verbose:
         print(f"Read {len(obj)} points from {filename}")
 
-    rgb = np.array(rgb).astype(np.float32) / 255.
+    rgb = np.array(rgb).astype(np.float32) / 255.0
 
     return np.array(pts), rgb
 
@@ -90,12 +92,12 @@ def read_images(filename, image_base_dir):
     rot = []
     T = []
     imgs = []
-    for img in images.values():
+    for img in tqdm(images.values()):
         rot.append(img.qvec2rotmat())
         T.append(img.tvec)
         imgs.append(read_one_image(image_base_dir / img.name))
 
-    return np.array(rot), np.array(T), np.array(imgs)
+    return np.array(rot), np.array(T), np.array(imgs).astype(np.float32) / 255.0
 
 
 def read_all(data_dir):

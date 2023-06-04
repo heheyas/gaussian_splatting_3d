@@ -1,3 +1,4 @@
+import cv2
 from pathlib import Path
 import numpy as np
 import torch
@@ -7,12 +8,18 @@ import matplotlib.pyplot as plt
 def tic():
     import time
 
+    if "_timing_" not in globals():
+        return
+
     global startTime_for_tictoc
     startTime_for_tictoc = time.time()
 
 
 def toc():
     import time
+
+    if "_timing_" not in globals():
+        return
 
     if "startTime_for_tictoc" in globals():
         print("$" * 30)
@@ -63,6 +70,16 @@ def save_fig(img, filename):
     fig.savefig(f"tmp/{filename}.png", bbox_inches="tight")
 
 
+def save_img(img, path, filename):
+    path = Path(path)
+    if not path.exists():
+        path.mkdir()
+
+    img = (img.detach().cpu().numpy() * 255.0).astype(np.uint8)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(str(path / filename), img)
+
+
 def float2uint8(img):
     if isinstance(img, torch.Tensor):
         img = (img * 255.0).to(torch.uint8)
@@ -80,5 +97,9 @@ def print_info(var, name):
     print(var.max())
     print(var.min())
     print(var.shape)
+    if var.dtype == torch.float32:
+        print("mean:", var.mean().item())
     print("nonzero:", torch.count_nonzero(var).item())
+    if var.isnan().any():
+        print("num nans", torch.count_nonzero(var.isnan()).item())
     print(f"++++++{name}++++++")

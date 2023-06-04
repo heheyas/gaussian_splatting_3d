@@ -354,7 +354,7 @@ def draw_2ds():
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
-    svec = torch.ones([N, 3], dtype=torch.float32) * 0.02
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.2
     mask = torch.zeros(N, dtype=torch.bool).to("cuda")
     xyz = torch.from_numpy(xyz)
     xyz = xyz.to("cuda").to(torch.float32)
@@ -487,6 +487,8 @@ def gs_count_tile():
     renderer = Renderer()
     camera, images, xyz, rgb = get_data(config())
     normals, pts = camera.get_frustum(0, 1.5, 1000)
+    print(normals)
+    print(pts)
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
@@ -513,6 +515,7 @@ def gs_count_tile():
     qvec = qvec[mask].contiguous()
     svec = svec[mask].contiguous()
 
+    print(camera.c2ws[0])
     mean, cov, JW, depth = renderer.project_gaussian(xyz, qvec, svec, camera, 0)
 
     print_info(mean, "mean")
@@ -530,12 +533,12 @@ def gs_count_tile():
     print_info(cov_inv, "cov_inv")
 
     ## test
-    cov += torch.eye(2, device="cuda")
+    # cov += torch.eye(2, device="cuda")
 
     # renderer.tile_partition(mean, cov_inv, camera, 1.0)
     color = torch.from_numpy(rgb).to("cuda").to(torch.float32)[mask]
     print_info(color, "color")
-    renderer.tile_partition_bcircle(mean, radius * 1.0, camera)
+    renderer.tile_partition_bcircle(mean, radius * 1.0, camera, cov, 0.01)
 
     renderer.image_level_radix_sort(mean, cov, radius * 1.0, depth, color, camera)
 
@@ -549,7 +552,7 @@ def test_gaussian_val():
     N = xyz.shape[0]
     qvec = torch.zeros([N, 4], dtype=torch.float32)
     qvec[..., 0] = 1.0
-    svec = torch.ones([N, 3], dtype=torch.float32) * 0.02
+    svec = torch.ones([N, 3], dtype=torch.float32) * 0.04
     mask = torch.zeros(N, dtype=torch.bool).to("cuda")
     xyz = torch.from_numpy(xyz)
     xyz = xyz.to("cuda").to(torch.float32)

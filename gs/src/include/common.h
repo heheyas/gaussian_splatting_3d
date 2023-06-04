@@ -61,6 +61,7 @@
 using torch::Tensor;
 
 const float EPS = 1e-6;
+const float MIN_RADIAL = -85.0f;
 const float gs_coeff_3d = 0.06349363593424097f; // 1 / (2 * pi) ** (3/2)
 const float gs_coeff_2d = 0.15915494309189535f; // 1 / (2 * pi)
 

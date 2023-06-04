@@ -28,7 +28,6 @@ def qvec2rotmat(qvec):
     )
 
 
-@torch.no_grad()
 def qsvec2rotmat_batched(
     qvec: TensorType["N", 4], svec: TensorType["N", 3]
 ) -> TensorType["N", 3, 3]:

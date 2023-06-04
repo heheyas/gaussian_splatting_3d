@@ -5,6 +5,9 @@ import torch.nn.functional as F
 from .colmap import read_images, read_cameras, read_pts_from_colmap
 from .misc import print_info
 from .transforms import rotmat2wxyz
+from rich.console import Console
+
+console = Console()
 
 """Using OpenCV coordinates"""
 
@@ -173,6 +176,16 @@ def get_data(cfg):
             camera.width,
             camera.height,
         )
+    elif camera.model == "PINHOLE":
+        cams = PerspectiveCameras(
+            c2ws,
+            float(params[0]),
+            float(params[1]),
+            float(params[2]),
+            float(params[3]),
+            camera.width,
+            camera.height,
+        )
     elif camera.model == "OPENCV_FISHEYE":
         # TODO: add fisheye camera support
         cams = PerspectiveCameras(
@@ -184,12 +197,74 @@ def get_data(cfg):
             camera.width,
             camera.height,
         )
+    else:
+        print("Not support camera model: ", camera.model)
+        raise NotImplementedError
 
     print(
         f"camera:\n\tfx: {cams.fx}; fy: {cams.fy}\n\tcx: {cams.cx}; cy: {cams.cy}\n\tH: {cams.h}; W: {cams.w}"
     )
 
     return cams, images, pts, rgb
+
+
+class CameraInfo:
+    def __init__(self, fx, fy, cx, cy, w, h, near_plane, far_plane) -> None:
+        self.fx, self.fy = fx, fy
+        self.cx, self.cy = cx, cy
+        self.w, self.h = w, h
+
+        self.yfov = 2 * np.arctan(self.h / (2 * self.fy))
+        self.aspect = w / h
+        self.near_plane = near_plane
+        self.far_plane = far_plane
+
+    def downsample(self, scale):
+        self.fx /= scale
+        self.fy /= scale
+        self.cx /= scale
+        self.cy /= scale
+        self.w //= scale
+        self.h //= scale
+
+        self.yfov = 2 * np.arctan(self.h / (2 * self.fy))
+        self.aspect = self.w / self.h
+
+    def get_frustum(self, c2w):
+        up = -c2w[:, 1]
+        right = c2w[:, 0]
+        lookat = c2w[:, 2]
+        t = c2w[:, 3]
+
+        half_vside = self.far_plane * np.tan(self.yfov * 0.5)
+        half_hside = half_vside * self.aspect
+
+        near_point = self.near_plane * lookat
+        far_point = self.far_plane * lookat
+        near_normal = lookat
+        far_normal = -lookat
+
+        left_normal = torch.cross(far_point - half_hside * right, up)
+        right_normal = torch.cross(up, far_point + half_hside * right)
+
+        up_normal = torch.cross(far_point + half_vside * up, right)
+        down_normal = torch.cross(right, far_point - half_vside * up)
+
+        pts = [near_point + t, far_point + t, t, t, t, t]
+        normals = [
+            near_normal,
+            far_normal,
+            left_normal,
+            right_normal,
+            up_normal,
+            down_normal,
+        ]
+
+        pts = torch.stack(pts, dim=0)
+        normals = torch.stack(normals, dim=0)
+        normals = F.normalize(normals, dim=-1)
+
+        return normals, pts
 
 
 def in_frustum(queries, normal, pts):
@@ -199,3 +274,74 @@ def in_frustum(queries, normal, pts):
         is_in = torch.logical_and(is_in, in_test)
 
     return is_in
+
+
+def get_c2ws_and_camera_info(cfg):
+    console.print("[bold green]Loading camera info...")
+    base = Path(cfg.data_dir)
+    cam_bin = base / "colmap" / "sparse" / "0" / "cameras.bin"
+    image_bin = base / "colmap" / "sparse" / "0" / "images.bin"
+    point_bin = base / "colmap" / "sparse" / "0" / "points3D.bin"
+    rot, t, images = read_images(image_bin, cfg.image_dir)
+    pts, rgb = read_pts_from_colmap(
+        point_bin,
+    )
+    t = np.expand_dims(t, axis=-1)
+    camera = read_cameras(cam_bin)
+    params = camera.params
+    # print(rot.shape)
+    # print(t.shape)
+    # print(images.shape)
+
+    rot = rot.transpose(0, 2, 1)
+    t = -rot @ t
+    c2ws = np.concatenate([rot, t], axis=2).astype(np.float32)
+    c2ws = torch.from_numpy(c2ws)
+
+    cams = None
+    console.print(f"[green bold]camera model: {camera.model}")
+
+    if camera.model == "OPENCV" or camera.model == "PINHOLE":
+        camera_info = CameraInfo(
+            float(params[0]),
+            float(params[1]),
+            float(params[2]),
+            float(params[3]),
+            camera.width,
+            camera.height,
+            cfg.near_plane,
+            cfg.far_plane,
+        )
+    elif camera.model == "OPENCV_FISHEYE":
+        # TODO: add fisheye camera support
+        raise NotImplementedError
+    else:
+        print("Not support camera model: ", camera.model)
+        raise NotImplementedError
+
+    console.print(f"[blue underline]downsample: {cfg.downsample}")
+
+    camera_info.downsample(cfg.downsample)
+
+    console.print(
+        f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
+    )
+
+    assert images.shape[0] == c2ws.shape[0]
+    if (
+        abs(camera_info.w - images.shape[2]) > 1
+        or abs(camera_info.h - images.shape[1]) > 1
+    ):
+        console.print("[red bold]camera image size not match")
+        exit(-1)
+
+    camera_info.h = images.shape[1]
+    camera_info.w = images.shape[2]
+
+    pts = pts.astype(np.float32)
+    rgb = rgb.astype(np.float32)
+    pts = torch.from_numpy(pts)
+    rgb = torch.from_numpy(rgb)
+    c2ws = c2ws.to(cfg.device)
+
+    return c2ws, camera_info, images, pts, rgb

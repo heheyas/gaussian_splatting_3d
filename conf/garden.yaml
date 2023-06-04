@@ -1,0 +1,31 @@
+# debug
+debug: True
+timing: False
+
+# system
+device: cuda:0
+
+# data
+data_name: garden
+data_dir: ./data/garden
+image_dir: ./data/garden/images_4
+downsample: 4
+
+# renderer
+tile_size: 16
+near_plane: 1.5
+far_plane: 1000.0
+tile_culling_type: bcircle
+tile_culling_thresh: 0.01
+frustum_culling_radius: 3.0
+tile_culling_radius: 3.0
+
+# model
+max_iteration: 10000
+lr: 5e-3
+alpha_init: 0.5
+svec_init: 0.2
+loss_fn: l2
+T_thresh: 0.01 # early stop threshold for transmitance
+ssim_loss_mult: 0.2 
+ssim_loss_win_size: 11

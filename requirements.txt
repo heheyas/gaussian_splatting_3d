@@ -5,3 +5,4 @@ hydra-core
 kornia
 visdom
 pytorch3d
+rich

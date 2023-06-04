@@ -10,7 +10,8 @@
         "utility": "cpp",
         "random": "cpp",
         "__locale": "cpp",
-        "__config": "cpp"
+        "__config": "cpp",
+        "ios": "cpp"
     },
     "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs"
 }

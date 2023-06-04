@@ -118,6 +118,9 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
     float coeff = alpha[i] * cum_alpha_this_time;
     float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
     coeff *= val;
+    if (alpha[i] * val < MIN_RENDER_ALPHA) {
+      continue;
+    }
     // if (threadIdx.x == 0) {
     //   printf("gaussian val: %f\n",
     //          kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos));
@@ -256,7 +259,6 @@ __global__ void tile_based_vol_rendering_entry(
   gaussian_ids += offset[tile_id];
 
   for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
-    gaussian_ids += n;
     int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
     carry(num_gaussian_sm, 2, sm_mean, mean, offset, gaussian_ids);
     carry(num_gaussian_sm, 4, sm_cov, cov, offset, gaussian_ids);
@@ -268,6 +270,7 @@ __global__ void tile_based_vol_rendering_entry(
                          n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh,
                          n == 0);
     __syncthreads();
+    gaussian_ids += num_gaussian_sm;
   }
   int global_y = blockIdx.y * tile_size + local_y;
   int global_x = blockIdx.x * tile_size + local_x;
@@ -330,7 +333,6 @@ __global__ void tile_based_vol_rendering_backward_entry(
   gaussian_ids += offset[tile_id];
 
   for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
-    gaussian_ids += n;
     int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
     carry(num_gaussian_sm, 2, sm_mean, mean, offset, gaussian_ids);
     carry(num_gaussian_sm, 4, sm_cov, cov, offset, gaussian_ids);
@@ -361,6 +363,7 @@ __global__ void tile_based_vol_rendering_backward_entry(
     carry_back(num_gaussian_sm, 1, sm_grad_alpha, grad_alpha, offset,
                gaussian_ids);
     __syncthreads();
+    gaussian_ids += num_gaussian_sm;
   }
 }
 
@@ -380,6 +383,9 @@ void tile_based_vol_rendering_cuda(uint32_t N, uint32_t N_with_dub, float *mean,
       N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
       topleft, tile_size, n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
       W, thresh);
+
+  cudaError_t last_error;
+  checkLastCudaError(last_error);
 }
 
 void tile_based_vol_rendering_backward_cuda(
@@ -396,4 +402,6 @@ void tile_based_vol_rendering_backward_cuda(
       N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
       grad_mean, grad_cov, grad_color, grad_alpha, grad_out, topleft, tile_size,
       n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+  cudaError_t last_error;
+  checkLastCudaError(last_error);
 }

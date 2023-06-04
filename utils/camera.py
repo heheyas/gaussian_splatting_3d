@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from .colmap import read_images, read_cameras, read_pts_from_colmap
+from .colmap import read_images, read_cameras, read_pts_from_colmap, read_images_test
 from .misc import print_info
 from .transforms import rotmat2wxyz
 from rich.console import Console
@@ -282,10 +282,22 @@ def get_c2ws_and_camera_info(cfg):
     cam_bin = base / "colmap" / "sparse" / "0" / "cameras.bin"
     image_bin = base / "colmap" / "sparse" / "0" / "images.bin"
     point_bin = base / "colmap" / "sparse" / "0" / "points3D.bin"
+    points_cached = base / "colmap" / "sparse" / "0" / "points_and_rgb.pt"
+    console.print("[bold green]Loading images...")
     rot, t, images = read_images(image_bin, cfg.image_dir)
-    pts, rgb = read_pts_from_colmap(
-        point_bin,
-    )
+    console.print("[bold green]Loading points...")
+    if points_cached.exists():
+        console.print("[bold green]Loading cached points...")
+        pts, rgb = torch.load(points_cached)
+    else:
+        pts, rgb = read_pts_from_colmap(
+            point_bin,
+        )
+        pts = pts.astype(np.float32)
+        rgb = rgb.astype(np.float32)
+        pts = torch.from_numpy(pts)
+        rgb = torch.from_numpy(rgb)
+        torch.save((pts, rgb), points_cached)
     t = np.expand_dims(t, axis=-1)
     camera = read_cameras(cam_bin)
     params = camera.params
@@ -323,9 +335,93 @@ def get_c2ws_and_camera_info(cfg):
 
     camera_info.downsample(cfg.downsample)
 
+    assert images.shape[0] == c2ws.shape[0]
+    if (
+        abs(camera_info.w - images.shape[2]) > 1
+        or abs(camera_info.h - images.shape[1]) > 1
+    ):
+        console.print("[red bold]camera image size not match")
+        exit(-1)
+
+    if (camera_info.h != images.shape[1]) or (camera_info.w != images.shape[2]):
+        console.print(
+            "[red bold]camera image size not match due to round caused by downsample"
+        )
+        camera_info.h = images.shape[1]
+        camera_info.w = images.shape[2]
+
     console.print(
         f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
     )
+
+    if isinstance(pts, np.ndarray):
+        pts = pts.astype(np.float32)
+        rgb = rgb.astype(np.float32)
+        pts = torch.from_numpy(pts)
+        rgb = torch.from_numpy(rgb)
+    c2ws = c2ws.to(cfg.device)
+
+    return c2ws, camera_info, images, pts, rgb
+
+
+def get_c2ws_and_camera_info_test(cfg):
+    console.print("[bold green]Loading camera info...")
+    base = Path(cfg.data_dir)
+    cam_bin = base / "colmap" / "sparse" / "0" / "cameras.bin"
+    image_bin = base / "colmap" / "sparse" / "0" / "images.bin"
+    point_bin = base / "colmap" / "sparse" / "0" / "points3D.bin"
+    points_cached = base / "colmap" / "sparse" / "0" / "points_and_rgb.pt"
+    console.print("[bold green]Loading images...")
+    rot, t, _ = read_images_test(image_bin, cfg.image_dir)
+    console.print("[bold green]Loading points...")
+    if points_cached.exists():
+        console.print("[bold green]Loading cached points...")
+        pts, rgb = torch.load(points_cached)
+    else:
+        pts, rgb = read_pts_from_colmap(
+            point_bin,
+        )
+        pts = pts.astype(np.float32)
+        rgb = rgb.astype(np.float32)
+        pts = torch.from_numpy(pts)
+        rgb = torch.from_numpy(rgb)
+        torch.save((pts, rgb), points_cached)
+    t = np.expand_dims(t, axis=-1)
+    camera = read_cameras(cam_bin)
+    params = camera.params
+
+    rot = rot.transpose(0, 2, 1)
+    t = -rot @ t
+    c2ws = np.concatenate([rot, t], axis=2).astype(np.float32)
+    c2ws = torch.from_numpy(c2ws)
+
+    cams = None
+    console.print(f"[green bold]camera model: {camera.model}")
+
+    if camera.model == "OPENCV" or camera.model == "PINHOLE":
+        camera_info = CameraInfo(
+            float(params[0]),
+            float(params[1]),
+            float(params[2]),
+            float(params[3]),
+            camera.width,
+            camera.height,
+            cfg.near_plane,
+            cfg.far_plane,
+        )
+    elif camera.model == "OPENCV_FISHEYE":
+        # TODO: add fisheye camera support
+        raise NotImplementedError
+    else:
+        print("Not support camera model: ", camera.model)
+        raise NotImplementedError
+
+    console.print(f"[blue underline]downsample: {cfg.downsample}")
+
+    camera_info.downsample(cfg.downsample)
+
+    N = rot.shape[0]
+    images = np.zeros([N, camera_info.h, camera_info.w, 3], dtype=np.float32)
 
     assert images.shape[0] == c2ws.shape[0]
     if (
@@ -335,13 +431,22 @@ def get_c2ws_and_camera_info(cfg):
         console.print("[red bold]camera image size not match")
         exit(-1)
 
-    camera_info.h = images.shape[1]
-    camera_info.w = images.shape[2]
+    if (camera_info.h != images.shape[1]) or (camera_info.w != images.shape[2]):
+        console.print(
+            "[red bold]camera image size not match due to round caused by downsample"
+        )
+        camera_info.h = images.shape[1]
+        camera_info.w = images.shape[2]
 
-    pts = pts.astype(np.float32)
-    rgb = rgb.astype(np.float32)
-    pts = torch.from_numpy(pts)
-    rgb = torch.from_numpy(rgb)
+    console.print(
+        f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
+    )
+
+    if isinstance(pts, np.ndarray):
+        pts = pts.astype(np.float32)
+        rgb = rgb.astype(np.float32)
+        pts = torch.from_numpy(pts)
+        rgb = torch.from_numpy(rgb)
     c2ws = c2ws.to(cfg.device)
 
     return c2ws, camera_info, images, pts, rgb

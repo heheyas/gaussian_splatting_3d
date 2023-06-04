@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import hydra
 from gs.renderer import GaussianRenderer
-from utils.camera import get_c2ws_and_camera_info
+from utils.camera import get_c2ws_and_camera_info, get_c2ws_and_camera_info_test
 from kornia.losses import ssim_loss
 from functools import partial
 from utils.misc import print_info, save_img
@@ -53,6 +53,9 @@ def main(cfg):
         for e in range(cfg.max_iteration):
             i = e % N_images
             out = renderer(c2ws[i], camera_info)
+            # if e == 0:
+            #     print_info(out, "out")
+            #     print("num total gaussian", renderer.total_dub_gaussians)
             gt = images[i].to(cfg.device)
             loss = loss_fn(out, gt)
             opt.zero_grad()
@@ -61,15 +64,15 @@ def main(cfg):
                 save_img(
                     out.cpu(),
                     f"./tmp/{cfg.data_name}",
-                    f"train_{e}.png",
+                    f"train_{e}_radius_{cfg.tile_culling_radius}.png",
                 )
                 writer.add_scalar("loss", loss.item(), e)
                 writer.add_image(
                     "out", out.cpu().moveaxis(-1, 0).clamp(min=0, max=1.0), e
                 )
-                # renderer.log_grad_bounds(writer, e)
-                # renderer.log_info(writer, e)
-                # renderer.log_n_gaussian_dub(writer, e)
+                renderer.log_grad_bounds(writer, e)
+                renderer.log_info(writer, e)
+                renderer.log_n_gaussian_dub(writer, e)
             # renderer.check_grad()
             opt.step()
 

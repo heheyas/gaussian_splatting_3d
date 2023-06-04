@@ -29,3 +29,10 @@ loss_fn: l2
 T_thresh: 0.01 # early stop threshold for transmitance
 ssim_loss_mult: 0.2 
 ssim_loss_win_size: 11
+
+# gaussian adaptive control
+pos_grad_thresh: 0.0002
+scale_shrink_factor: 1.6
+alpha_reset_period: 3000
+alpha_reset_val: 0.1
+alpha_thresh: 0.01

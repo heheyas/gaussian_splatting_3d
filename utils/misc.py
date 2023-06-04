@@ -103,3 +103,7 @@ def print_info(var, name):
     if var.isnan().any():
         print("num nans", torch.count_nonzero(var.isnan()).item())
     print(f"++++++{name}++++++")
+
+
+def mp_read(filenames):
+    pass

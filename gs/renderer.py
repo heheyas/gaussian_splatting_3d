@@ -680,6 +680,18 @@ class GaussianRenderer(torch.nn.Module):
             self.T_thresh,
         ).view(H, W, 3)
 
+    def split_gaussians(self):
+        pass
+
+    def clone_gaussians(self):
+        pass
+
+    def remove_low_alpha_gaussians(self):
+        pass
+
+    def adaptive_control(self):
+        pass
+
     def check_grad(self):
         print_info(self.qvec.grad, "grad_qvec")
         print_info(self.log_svec.grad, "grad_svec")

@@ -66,6 +66,7 @@ const float gs_coeff_3d = 0.06349363593424097f; // 1 / (2 * pi) ** (3/2)
 const float gs_coeff_2d = 0.15915494309189535f; // 1 / (2 * pi)
 
 const int MAX_N_FLOAT_SM = 12000; // 48KB
+const float MIN_RENDER_ALPHA = 1 / 255.0f;
 
 template <typename T>
 __host__ __device__ inline T div_round_up(T val, T divisor) {

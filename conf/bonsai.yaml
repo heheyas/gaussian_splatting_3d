@@ -6,10 +6,10 @@ timing: False
 device: cuda:0
 
 # data
-data_name: garden
-data_dir: ./data/garden
-image_dir: ./data/garden/images_4
-downsample: 4
+data_name: bonsai
+data_dir: ./data/bonsai
+image_dir: ./data/bonsai/images_2
+downsample: 2
 
 # renderer
 tile_size: 16
@@ -24,8 +24,8 @@ tile_culling_radius: 5.0
 random_init: False
 max_iteration: 10000
 lr: 5e-3
-alpha_init: 0.8
-svec_init: 0.05
+alpha_init: 0.1
+svec_init: 0.01
 loss_fn: l2
 T_thresh: 0.01 # early stop threshold for transmitance
 ssim_loss_mult: 0.2 

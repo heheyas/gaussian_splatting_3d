@@ -319,8 +319,6 @@ __global__ void fill_tiledepth_kernel_sm(
                                   pixel_size_y, g_mean + 2 * i, g_cov + 4 * i,
                                   thresh)) {
       cnt += 1;
-      // tile_ids[2 * off] = global_id;
-      // tile_depths[2 * off + 1] = depth[N_base + i];
       tile_ids[2 * off + 1] = global_id;
       tile_depths[2 * off] = depth[N_base + i];
       off += 1;

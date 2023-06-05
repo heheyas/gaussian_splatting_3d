@@ -266,6 +266,11 @@ class CameraInfo:
 
         return normals, pts
 
+    def print_camera_info(self):
+        console.print(
+            f"[blue underline]camera:\n\tfx: {self.fx:.2f}; fy: {self.fy:.2f}\n\tcx: {self.cx:.2f}; cy: {self.cy:.2f}\n\tH: {self.h}; W: {self.w}\n\tpixel_size: {1 / self.fx:.4g} pixel_size_y: {1 / self.fy:.4g}"
+        )
+
 
 def in_frustum(queries, normal, pts):
     is_in = torch.ones_like(queries[..., 0], dtype=torch.bool)
@@ -438,9 +443,10 @@ def get_c2ws_and_camera_info_test(cfg):
         camera_info.h = images.shape[1]
         camera_info.w = images.shape[2]
 
-    console.print(
-        f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
-    )
+    # console.print(
+    #     f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
+    # )
+    camera_info.print_camera_info()
 
     if isinstance(pts, np.ndarray):
         pts = pts.astype(np.float32)

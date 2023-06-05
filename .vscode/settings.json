@@ -11,7 +11,10 @@
         "random": "cpp",
         "__locale": "cpp",
         "__config": "cpp",
-        "ios": "cpp"
+        "ios": "cpp",
+        "chrono": "cpp",
+        "limits": "cpp",
+        "algorithm": "cpp"
     },
     "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs"
 }

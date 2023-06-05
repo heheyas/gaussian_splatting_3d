@@ -15,7 +15,7 @@ def tic():
     startTime_for_tictoc = time.time()
 
 
-def toc():
+def toc(name=""):
     import time
 
     if "_timing_" not in globals():
@@ -24,7 +24,9 @@ def toc():
     if "startTime_for_tictoc" in globals():
         print("$" * 30)
         print(
-            "Elapsed time is " + str(time.time() - startTime_for_tictoc) + " seconds."
+            f"{name} Elapsed time is "
+            + str(time.time() - startTime_for_tictoc)
+            + " seconds."
         )
         print("$" * 30)
     else:

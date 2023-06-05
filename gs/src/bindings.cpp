@@ -1,3 +1,4 @@
+#include "debug.h"
 #include "render.h"
 #include <torch/extension.h>
 
@@ -15,4 +16,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Tile based volume rendering");
   m.def("tile_based_vol_rendering_backward", &tile_based_vol_rendering_backward,
         "Tile based volume rendering backward");
+  m.def("debug_check_tiledepth", &debug_check_tiledepth,
+        "(DEBUG) check tile and depth");
 }

@@ -569,6 +569,9 @@ class GaussianRenderer(torch.nn.Module):
             p = torch.det(cov)
             radius = torch.sqrt(m + torch.sqrt((m.pow(2) - p).clamp(min=0.0)))
 
+        if self.cfg.debug:
+            print_info(radius, "radius")
+
         H, W = camera_info.h, camera_info.w
         n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
         n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
@@ -610,7 +613,7 @@ class GaussianRenderer(torch.nn.Module):
                 )
             else:
                 raise NotImplementedError
-        toc()
+        toc("tile culling")
 
         self.total_dub_gaussians = num_gaussians.sum().item()
 
@@ -659,10 +662,14 @@ class GaussianRenderer(torch.nn.Module):
                 )
             else:
                 raise NotImplementedError
-        toc()
+        toc("radix sort")
         offset[-1] = self.total_dub_gaussians
 
-        return render(
+        if self.cfg.debug:
+            _backend.debug_check_tiledepth(offset.cpu(), tiledepth.cpu())
+
+        tic()
+        out = render(
             mean,
             cov,
             color,
@@ -679,6 +686,9 @@ class GaussianRenderer(torch.nn.Module):
             W,
             self.T_thresh,
         ).view(H, W, 3)
+        toc("render")
+
+        return out
 
     def split_gaussians(self):
         pass

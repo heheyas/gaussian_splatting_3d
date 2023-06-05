@@ -187,7 +187,10 @@ __device__ void vol_render_one_batch_backward(
     }
     float alpha_ = alpha[i];
     float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
-    float coeff = alpha_ * cum_alpha_this_time * G;               // a * T * G
+    if (alpha_ * G < MIN_RENDER_ALPHA) {
+      continue;
+    }
+    float coeff = alpha_ * cum_alpha_this_time * G; // a * T * G
     float color_this_gaussian[3];
     color_this_gaussian[0] = color[3 * i + 0] * coeff; // C * alpha * T * G
     color_this_gaussian[1] = color[3 * i + 1] * coeff;

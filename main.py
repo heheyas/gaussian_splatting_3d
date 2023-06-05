@@ -64,8 +64,10 @@ def main(cfg):
                 save_img(
                     out.cpu(),
                     f"./tmp/{cfg.data_name}",
-                    f"train_{e}_radius_{cfg.tile_culling_radius}.png",
+                    f"train_{e}_radius_{cfg.tile_culling_radius}_type_{cfg.tile_culling_type}.png",
                 )
+                if cfg.debug:
+                    exit(0)
                 writer.add_scalar("loss", loss.item(), e)
                 writer.add_image(
                     "out", out.cpu().moveaxis(-1, 0).clamp(min=0, max=1.0), e

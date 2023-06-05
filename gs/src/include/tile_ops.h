@@ -139,7 +139,7 @@ void count_tiled_gaussians_cuda_sm(uint32_t N, float *mean, float *cov,
         thresh);
     cudaError_t last_error;
     checkLastCudaError(last_error);
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
   }
   return;
 }
@@ -148,8 +148,11 @@ void count_tiled_gaussians_bcircle_cuda_sm(
     uint32_t N, float *mean, float *radius, float *topleft, uint32_t tile_size,
     uint32_t n_tiles_h, uint32_t n_tiles_w, float pixel_size_x,
     float pixel_size_y, int *num_gaussians) {
+
+  GpuTimer timer;
   const int max_num_gaussians_sm = MAX_N_FLOAT_SM / 3;
   uint32_t n_blocks = div_round_up(n_tiles_h * n_tiles_w, (uint32_t)N_THREADS);
+  timer.Start();
 #pragma unroll
   for (int i = 0; i < N; i += max_num_gaussians_sm) {
     uint32_t num_gaussians_sm = min(max_num_gaussians_sm, N - i);
@@ -160,8 +163,9 @@ void count_tiled_gaussians_bcircle_cuda_sm(
         n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, num_gaussians);
     cudaError_t last_error;
     checkLastCudaError(last_error);
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
   }
+  timer.Stop();
   return;
 }
 
@@ -257,7 +261,7 @@ void fill_tiledepth_bsphere_cuda(uint32_t N, int *gaussian_ids,
         n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y);
     cudaError_t last_error;
     checkLastCudaError(last_error);
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
     N_base += num_gaussians_sm;
   }
   return;
@@ -351,7 +355,7 @@ void fill_tiledepth_cuda(uint32_t N, int *gaussian_ids, double *tiledepth,
         n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, thresh);
     cudaError_t last_error;
     checkLastCudaError(last_error);
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
     N_base += num_gaussians_sm;
   }
   return;
@@ -366,10 +370,15 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   // N stands for number of gaussians
   // assuimg inclusive scan is not done
   // printf("prepare_image_sort_cuda N: %d\n", N);
+
+  GpuTimer Timer;
   cudaError_t last_error;
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
   size_t n_tiles = n_tiles_h * n_tiles_w;
+
+  Timer.Start();
+
   cudaCheck(cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes,
                                           tile_n_gaussians, offset, n_tiles));
   // printf("temp_storage_bytes: %d\n", temp_storage_bytes);
@@ -378,6 +387,12 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   // printf("tiledepth: %p\n", tiledepth);
   cudaCheck(cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes,
                                           tile_n_gaussians, offset, n_tiles));
+
+  Timer.Stop();
+  // printf("[CUDA] in [prepare_image_sort] exlusive sum time: %f ms\n",
+  //  Timer.Elapsed());
+
+  Timer.Start();
   int *unsorted_gaussian_ids;
   cudaCheck(
       cudaMalloc((void **)&unsorted_gaussian_ids, N_with_dub * sizeof(int)));
@@ -387,9 +402,15 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
                               pixel_size_y);
   checkLastCudaError(last_error);
 
+  Timer.Stop();
+  // printf("[CUDA] in [prepare_image_sort] fill_tiledepth_bsphere time:
+  // %f ms\n",
+  //  Timer.Elapsed());
+
   int64_t *sorted_keys;
   cudaCheck(cudaMalloc((void **)&sorted_keys, N_with_dub * sizeof(int64_t)));
 
+  Timer.Start();
   int64_t *keys = reinterpret_cast<int64_t *>(tiledepth);
   cudaCheck(cudaFree(d_temp_storage));
   d_temp_storage = NULL;
@@ -401,6 +422,10 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   cudaCheck(cub::DeviceRadixSort::SortPairs(
       d_temp_storage, temp_storage_bytes, keys, sorted_keys,
       unsorted_gaussian_ids, gaussian_ids, N_with_dub));
+
+  Timer.Stop();
+  // printf("[CUDA] in [prepare_image_sort] Sorting time: %f ms\n",
+  //  Timer.Elapsed());
 
   cudaCheck(cudaFree(sorted_keys));
   cudaCheck(cudaFree(unsorted_gaussian_ids));
@@ -442,6 +467,7 @@ void image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
 
   int64_t *keys = reinterpret_cast<int64_t *>(tiledepth);
   cudaCheck(cudaFree(d_temp_storage));
+
   d_temp_storage = NULL;
   temp_storage_bytes = 0;
   cudaCheck(cub::DeviceRadixSort::SortPairs(

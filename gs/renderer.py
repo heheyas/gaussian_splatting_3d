@@ -1,17 +1,29 @@
 from typing import Any
 import cv2
 from utils.camera import PerspectiveCameras
-from utils.transforms import qsvec2rotmat_batched
+from utils.transforms import qsvec2rotmat_batched, qvec2rotmat_batched
 from utils.misc import print_info, tic, toc
 import numpy as np
 from torchtyping import TensorType
 import torch
 import matplotlib.pyplot as plt
+from scipy.special import logit, expit
+from rich.console import Console
+from utils.activations import activations, inv_activations
+
+console = Console()
 
 try:
     import _gs as _backend
 except ImportError:
     from .backend import _backend
+
+
+def step_check(step, step_size, run_at_zero=False) -> bool:
+    """Returns true based on current step and step interval. credit: nerfstudio"""
+    if step_size == 0:
+        return False
+    return (run_at_zero or step != 0) and step % step_size == 0
 
 
 class Renderer:
@@ -286,9 +298,6 @@ class Renderer:
         print_info(diff, "diff")
 
         out = torch.zeros([H * W * 3], dtype=torch.float32, device="cuda")
-        # color = torch.ones(
-        #     [self.total_gaussians, 3], dtype=torch.float32, device="cuda"
-        # )
         alpha = (
             torch.ones([self.total_gaussians], dtype=torch.float32, device="cuda") * 1.0
         )
@@ -413,7 +422,7 @@ class _render(torch.autograd.Function):
         W,
         thresh,
     ):
-        out = torch.empty([H * W * 3], dtype=torch.float32, device=mean.device)
+        out = torch.zeros([H * W * 3], dtype=torch.float32, device=mean.device)
         _backend.tile_based_vol_rendering(
             mean,
             cov,
@@ -522,20 +531,81 @@ class GaussianRenderer(torch.nn.Module):
         self.mean = torch.nn.parameter.Parameter(pts)
         self.qvec = torch.nn.Parameter(torch.zeros([self.N, 4]))
         self.qvec.data[..., 0] = 1.0
-        self.log_svec = torch.nn.Parameter(
-            torch.ones([self.N, 3]) * np.log(cfg.svec_init)
-        )
-        self.color = torch.nn.Parameter(rgb)
-        self.alpha = torch.nn.Parameter(torch.ones([self.N]) * cfg.alpha_init)
 
-        self.near_plane = cfg.near_plane
-        self.far_plane = cfg.far_plane
+        self.svec_before_activation = torch.nn.Parameter(
+            torch.ones([self.N, 3])
+        )
+        self.color_before_activation = torch.nn.Parameter(
+            rgb
+        )
+        self.alpha_before_activation = torch.nn.Parameter(
+            torch.ones([self.N])
+        )
+
+        self.svec_act = activations[cfg.svec_act]
+        self.color_act = activations[cfg.color_act]
+        self.alpha_act = activations[cfg.alpha_act]
+
+        self.svec_inv_act = inv_activations[cfg.svec_act]
+        self.color_inv_act = inv_activations[cfg.color_act]
+        self.alpha_inv_act = inv_activations[cfg.alpha_act]
+        
+        self.svec_before_activation.data.fill_(self.svec_inv_act(cfg.svec_init))
+        self.color_before_activation.data = self.color_inv_act(rgb)
+        self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
+
+
+        self.set_cfg(cfg)
+
+        # # camera imaging params
+        # self.near_plane = cfg.near_plane
+        # self.far_plane = cfg.far_plane
+        # self.tile_size = cfg.tile_size
+
+        # # frustum culling params
+        # self.frustum_culling_radius = cfg.frustum_culling_radius
+
+        # # tile culling params
+        # self.tile_culling_type = cfg.tile_culling_type
+        # self.tile_culling_radius = cfg.tile_culling_radius
+        # self.tile_culling_thresh = cfg.tile_culling_thresh
+
+        # # rendering params
+        # self.T_thresh = cfg.T_thresh
+
+        # # adaptive control params
+        # self.pos_grad_thresh = cfg.pos_grad_thresh
+        # self.split_scale_thresh = cfg.split_scale_thresh
+        # self.scale_shrink_factor = cfg.scale_shrink_factor
+        # self.alpha_reset_period = cfg.alpha_reset_period
+        # self.alpha_reset_val = cfg.alpha_reset_val
+        # self.alpha_thresh = cfg.alpha_thresh
+
+    def set_cfg(self, cfg):
+        # camera imaging params
+        # self.near_plane = cfg.near_plane
+        # self.far_plane = cfg.far_plane
         self.tile_size = cfg.tile_size
+
+        # frustum culling params
         self.frustum_culling_radius = cfg.frustum_culling_radius
+
+        # tile culling params
         self.tile_culling_type = cfg.tile_culling_type
         self.tile_culling_radius = cfg.tile_culling_radius
         self.tile_culling_thresh = cfg.tile_culling_thresh
+
+        # rendering params
         self.T_thresh = cfg.T_thresh
+
+        # adaptive control params
+        self.adaptive_control_iteration = cfg.adaptive_control_iteration
+        self.pos_grad_thresh = cfg.pos_grad_thresh
+        self.split_scale_thresh = cfg.split_scale_thresh
+        self.scale_shrink_factor = cfg.scale_shrink_factor
+        self.alpha_reset_period = cfg.alpha_reset_period
+        self.alpha_reset_val = cfg.alpha_reset_val
+        self.alpha_thresh = cfg.alpha_thresh
 
     def forward(self, c2w, camera_info):
         f_normals, f_pts = camera_info.get_frustum(c2w)
@@ -544,7 +614,7 @@ class GaussianRenderer(torch.nn.Module):
             _backend.culling_gaussian_bsphere(
                 self.mean,
                 self.qvec,
-                self.log_svec.exp(),
+                self.svec,
                 f_normals,
                 f_pts,
                 mask,
@@ -552,22 +622,26 @@ class GaussianRenderer(torch.nn.Module):
             )
         mean = self.mean[mask].contiguous()
         qvec = self.qvec[mask].contiguous()
-        svec = self.log_svec[mask].exp().contiguous()
+        svec = self.svec[mask].contiguous()
         color = self.color[mask].contiguous()
-        # alpha = self.alpha[mask].contiguous()
-        # alpha = torch.nn.functional.sigmoid(self.alpha[mask].contiguous())
-        alpha = torch.sigmoid(self.alpha[mask].contiguous())
+        alpha = self.alpha[mask].contiguous()
 
         pixel_size_x = 1.0 / camera_info.fx
         pixel_size_y = 1.0 / camera_info.fy
 
         mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
 
+        # depth = depth.squeeze()
+        # depth = depth.max() - depth + 0.3
+
         cov = (cov + cov.transpose(-1, -2)) / 2.0
         with torch.no_grad():
             m = (cov[..., 0, 0] + cov[..., 1, 1]) / 2.0
             p = torch.det(cov)
             radius = torch.sqrt(m + torch.sqrt((m.pow(2) - p).clamp(min=0.0)))
+
+        self.depth = depth
+        self.radius = radius
 
         if self.cfg.debug:
             print_info(radius, "radius")
@@ -576,6 +650,10 @@ class GaussianRenderer(torch.nn.Module):
         n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
         n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
         n_tiles = n_tiles_h * n_tiles_w
+
+        if self.cfg.debug:
+            print("n_tiles", n_tiles)
+        
         img_topleft = torch.FloatTensor(
             [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
         ).to(self.device)
@@ -665,8 +743,8 @@ class GaussianRenderer(torch.nn.Module):
         toc("radix sort")
         offset[-1] = self.total_dub_gaussians
 
-        if self.cfg.debug:
-            _backend.debug_check_tiledepth(offset.cpu(), tiledepth.cpu())
+        # if self.cfg.debug:
+        #     _backend.debug_check_tiledepth(offset.cpu(), tiledepth.cpu())
 
         tic()
         out = render(
@@ -690,21 +768,119 @@ class GaussianRenderer(torch.nn.Module):
 
         return out
 
-    def split_gaussians(self):
-        pass
+    @property
+    def svec(self):
+        return self.svec_act(self.svec_before_activation)
 
-    def clone_gaussians(self):
-        pass
+    @property
+    def color(self):
+        return self.color_act(self.color_before_activation)
+
+    @property
+    def alpha(self):
+        return self.alpha_act(self.alpha_before_activation)
+
+    def split_gaussians(self):
+        assert self.mean.grad is not None, "mean.grad is None"
+        console.print("[red bold]Splitting Gaussians")
+        mean_mask = (self.mean.grad.norm(dim=-1) > self.pos_grad_thresh)
+        svec_mask = (self.svec.data > self.split_scale_thresh).any(dim=-1)
+        split_mask = torch.logical_and(mean_mask, svec_mask)
+        clone_mask = torch.logical_and(mean_mask, torch.logical_not(split_mask))
+
+        num_split = split_mask.sum().item()
+        num_clone = clone_mask.sum().item()
+
+        console.print(f"[red bold]num_split {num_split} num_clone {num_clone}")
+        
+        num_new_gaussians = num_split + num_clone
+
+        split_mean = self.mean.data[split_mask].repeat(2, 1)
+        split_qvec = self.qvec.data[split_mask].repeat(2, 1)
+        split_svec = self.svec.data[split_mask].repeat(2, 1)
+        # split_svec_ba = self.svec_before_activation.data[split_mask].repeat(2, 1)
+        split_color_ba = self.color_before_activation.data[split_mask].repeat(2, 1)
+        split_alpha_ba = self.alpha_before_activation.data[split_mask].repeat(2)
+        split_rotmat = qvec2rotmat_batched(split_qvec).transpose(-1, -2)
+        
+        split_gn = torch.randn(num_split * 2, 3, device=self.mean.device) * split_svec
+
+        split_sampled_mean = split_mean + torch.einsum("bij, bj -> bi", split_rotmat, split_gn)
+
+        # check left product or right product
+
+        old_num_gaussians = self.N
+        unchanged_gaussians = old_num_gaussians - num_split
+        self.N += num_new_gaussians
+        console.print(f"[red bold]num gaussians: {self.N}")
+
+        new_mean = torch.zeros([self.N, 3], device=self.device)
+        new_qvec = torch.zeros([self.N, 4], device=self.device)
+        new_svec = torch.zeros([self.N, 3], device=self.device)
+        new_color = torch.zeros([self.N, 3], device=self.device)
+        new_alpha = torch.zeros([self.N], device=self.device)
+
+        # copy old gaussians
+        new_mean[:unchanged_gaussians] = self.mean.data[~split_mask]
+        new_qvec[:unchanged_gaussians] = self.qvec.data[~split_mask]
+        new_svec[:unchanged_gaussians] = self.svec_before_activation.data[~split_mask]
+        new_color[:unchanged_gaussians] = self.color_before_activation.data[~split_mask]
+        new_alpha[:unchanged_gaussians] = self.alpha_before_activation.data[~split_mask]
+
+        # clone gaussians
+        new_mean[unchanged_gaussians:unchanged_gaussians + num_clone] = self.mean.data[clone_mask]
+        new_qvec[unchanged_gaussians:unchanged_gaussians + num_clone] = self.qvec.data[clone_mask]
+        new_svec[unchanged_gaussians:unchanged_gaussians + num_clone] = self.svec_before_activation.data[clone_mask]
+        new_color[unchanged_gaussians:unchanged_gaussians + num_clone] = self.color_before_activation.data[clone_mask]
+        new_alpha[unchanged_gaussians:unchanged_gaussians + num_clone] = self.alpha_before_activation.data[clone_mask]
+
+        pts = unchanged_gaussians + num_clone
+        
+        new_mean[pts: pts + 2 * num_split] = split_sampled_mean
+        new_qvec[pts: pts + 2 * num_split] = split_qvec
+        new_color[pts: pts + 2 * num_split] = split_color_ba
+        new_alpha[pts: pts + 2 * num_split] = split_alpha_ba
+        new_svec[pts: pts + 2 * num_split] = self.svec_inv_act(split_svec / self.scale_shrink_factor)
+
+        self.mean = torch.nn.Parameter(new_mean)
+        self.qvec = torch.nn.Parameter(new_qvec)
+        self.svec_before_activation = torch.nn.Parameter(new_svec)
+        self.color_before_activation = torch.nn.Parameter(new_color)
+        self.alpha_before_activation = torch.nn.Parameter(new_alpha)
+        
 
     def remove_low_alpha_gaussians(self):
-        pass
+        mask = self.alpha_act(self.alpha_before_activation.data) >= self.alpha_thresh
+        self.mean = torch.nn.Parameter(self.mean.data[mask])
+        self.qvec = torch.nn.Parameter(self.qvec.data[mask])
+        self.color_before_activation = torch.nn.Parameter(self.color_before_activation.data[mask])
+        self.alpha_before_activation = torch.nn.Parameter(self.alpha_before_activation.data[mask])
+        self.svec_before_activation = torch.nn.Parameter(self.svec_before_activation.data[mask])
+        
+        removed = self.N - self.mean.shape[0]
+        self.N = self.mean.shape[0]
+        console.print("[yellow]remove_low_alpha_gaussians[/yellow]")
+        console.print(f"[yellow]removed {removed} gaussians, remaining {self.N} gaussians")
 
-    def adaptive_control(self):
-        pass
+    def reset_alpha(self):
+        console.print("[yellow]reset alpha[/yellow]")
+        print(self.alpha_inv_act)
+        self.alpha_before_activation.data.fill_(self.alpha_inv_act(self.alpha_reset_val))
+        with torch.no_grad():
+            print_info(self.alpha, "alpha")
+
+    def adaptive_control(self, iteration):
+        if step_check(iteration + 1, self.alpha_reset_period):
+            self.remove_low_alpha_gaussians()
+        if step_check(iteration, self.alpha_reset_period, run_at_zero=False):
+            self.reset_alpha()
+
+        if step_check(iteration, self.adaptive_control_iteration):
+            self.split_gaussians()
 
     def check_grad(self):
         print_info(self.qvec.grad, "grad_qvec")
-        print_info(self.log_svec.grad, "grad_svec")
+        print_info(self.svec_before_activation.grad, "grad_svec")
 
     def check_info(self):
         # print_info(self.qvec, "qvec")
@@ -716,24 +892,76 @@ class GaussianRenderer(torch.nn.Module):
 
     @torch.no_grad()
     def log_grad_bounds(self, writer, step):
+        if self.mean.grad is None:
+            return
         writer.add_scalar("grad_bounds/mean_max", self.mean.grad.max(), step)
         writer.add_scalar("grad_bounds/mean_min", self.mean.grad.min(), step)
         writer.add_scalar("grad_bounds/qvec_max", self.qvec.grad.max(), step)
         writer.add_scalar("grad_bounds/qvec_min", self.qvec.grad.min(), step)
-        writer.add_scalar("grad_bounds/log_svec_max", self.log_svec.grad.max(), step)
-        writer.add_scalar("grad_bounds/log_svec_min", self.log_svec.grad.min(), step)
-        writer.add_scalar("grad_bounds/color_max", self.color.grad.max(), step)
-        writer.add_scalar("grad_bounds/color_min", self.color.grad.min(), step)
-        writer.add_scalar("grad_bounds/alpha_max", self.alpha.grad.max(), step)
-        writer.add_scalar("grad_bounds/alpha_min", self.alpha.grad.min(), step)
+        writer.add_scalar("grad_bounds/svec_max", self.svec_before_activation.grad.max(), step)
+        writer.add_scalar("grad_bounds/svec_min", self.svec_before_activation.grad.min(), step)
+        writer.add_scalar("grad_bounds/color_max", self.color_before_activation.grad.max(), step)
+        writer.add_scalar("grad_bounds/color_min", self.color_before_activation.grad.min(), step)
+        writer.add_scalar("grad_bounds/alpha_max", self.alpha_before_activation.grad.max(), step)
+        writer.add_scalar("grad_bounds/alpha_min", self.alpha_before_activation.grad.min(), step)
 
     @torch.no_grad()
     def log_info(self, writer, step):
         writer.add_scalar("info/mean_mean", self.mean.abs().mean(), step)
         writer.add_scalar("info/qvec_mean", self.qvec.abs().mean(), step)
-        writer.add_scalar("info/svec_mean", self.log_svec.exp().mean(), step)
+        writer.add_scalar("info/svec_mean", self.svec.abs().mean(), step)
         writer.add_scalar("info/color_mean", self.color.abs().mean(), step)
-        writer.add_scalar("info/alpha_mean", self.alpha.abs().mean(), step)
+        writer.add_scalar("info/alpha_mean", self.alpha.sigmoid().mean(), step)
+
+    @torch.no_grad()
+    def log_bounds(self, writer, step):
+        """log the bounds of the parameters"""
+        writer.add_scalar("bounds/mean_max", self.mean.max(), step)
+        writer.add_scalar("bounds/mean_min", self.mean.min(), step)
+        writer.add_scalar("bounds/qvec_max", self.qvec.max(), step)
+        writer.add_scalar("bounds/qvec_min", self.qvec.min(), step)
+        writer.add_scalar("bounds/svec_max", self.svec.max(), step)
+        writer.add_scalar("bounds/svec_min", self.svec.min(), step)
+        writer.add_scalar("bounds/color_max", self.color.max(), step)
+        writer.add_scalar("bounds/color_min", self.color.min(), step)
+        writer.add_scalar("bounds/alpha_max", self.alpha.max(), step)
+        writer.add_scalar("bounds/alpha_min", self.alpha.min(), step)
+        
+    @torch.no_grad()
+    def log_depth_and_radius(self, writer, step):
+        """log the bounds of the parameters"""
+        writer.add_scalar("bounds/depth_max", self.depth.max(), step)
+        writer.add_scalar("bounds/depth_min", self.depth.min(), step)
+        writer.add_scalar("bounds/radius_max", self.radius.max(), step)
+        writer.add_scalar("bounds/radius_min", self.radius.min(), step)
+        writer.add_scalar("bounds/depth_mean", self.depth.mean(), step)
+        writer.add_scalar("bounds/radius_mean", self.radius.mean(), step)
+
+    @torch.no_grad()
+    def log(self, writer, step):
+        self.log_bounds(writer, step)
+        self.log_info(writer, step)
+        self.log_grad_bounds(writer, step)
+        self.log_n_gaussian_dub(writer, step)
+        self.log_depth_and_radius(writer, step)
 
     def sanity_check(self):
         print()
+
+    def save(self, path):
+        state_dict = {
+            "mean": self.mean.data,
+            "qvec": self.qvec.data,
+            "log_svec": self.log_svec.data,
+            "color": self.color.data,
+            "alpha": self.alpha.data,
+            "N": self.N,
+            "cfg": self.cfg,
+        }
+
+        torch.save(state_dict, path)
+
+    @classmethod
+    def load(self, path):
+        state_dict = torch.load(path)
+        renderer = Renderer(state_dict["cfg"])

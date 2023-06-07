@@ -9,6 +9,7 @@
 // #define CUDA_HOSTDEV
 // #endif
 
+#include <assert.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <device_atomic_functions.h>
@@ -56,6 +57,12 @@
       printf("code:%d, reason:%s\n", error, cudaGetErrorString(error));        \
       exit(1);                                                                 \
     }                                                                          \
+  }
+
+#define checkValue(val)                                                        \
+  if (isnan(val) || isinf(val)) {                                              \
+    printf("SINGULAR VAL ERROR: %s:%d,", __FILE__, __LINE__);                  \
+    printf("value: %f\n", val);                                                \
   }
 
 using torch::Tensor;

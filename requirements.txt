@@ -6,3 +6,4 @@ kornia
 visdom
 pytorch3d
 rich
+torchmetrics

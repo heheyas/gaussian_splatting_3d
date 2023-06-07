@@ -4,11 +4,13 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
+_timing_ = False
+
 
 def tic():
     import time
 
-    if "_timing_" not in globals():
+    if "_timing_" not in globals() or not _timing_:
         return
 
     global startTime_for_tictoc
@@ -18,7 +20,7 @@ def tic():
 def toc(name=""):
     import time
 
-    if "_timing_" not in globals():
+    if "_timing_" not in globals() or not _timing_:
         return
 
     if "startTime_for_tictoc" in globals():
@@ -71,7 +73,7 @@ def save_fig(img, filename):
     ax.imshow(img)
     fig.savefig(f"tmp/{filename}.png", bbox_inches="tight")
 
-
+    
 def save_img(img, path, filename):
     path = Path(path)
     if not path.exists():

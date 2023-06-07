@@ -2,8 +2,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from .colmap import read_images, read_cameras, read_pts_from_colmap, read_images_test
-from .misc import print_info
+from .colmap import (
+    read_images,
+    read_cameras,
+    read_pts_from_colmap,
+    read_images_test,
+    read_images_v1,
+)
+from .misc import print_info, tic, toc
 from .transforms import rotmat2wxyz
 from rich.console import Console
 
@@ -230,6 +236,15 @@ class CameraInfo:
         self.yfov = 2 * np.arctan(self.h / (2 * self.fy))
         self.aspect = self.w / self.h
 
+    def upsample(self, scale):
+        self.fx *= scale
+        self.fy *= scale
+        self.cx *= scale
+        self.cy *= scale
+        self.w *= int(scale)
+        self.h *= int(scale)
+        
+
     def get_frustum(self, c2w):
         up = -c2w[:, 1]
         right = c2w[:, 0]
@@ -270,6 +285,30 @@ class CameraInfo:
         console.print(
             f"[blue underline]camera:\n\tfx: {self.fx:.2f}; fy: {self.fy:.2f}\n\tcx: {self.cx:.2f}; cy: {self.cy:.2f}\n\tH: {self.h}; W: {self.w}\n\tpixel_size: {1 / self.fx:.4g} pixel_size_y: {1 / self.fy:.4g}"
         )
+
+    def camera_space_to_pixel_space(self, pts):
+        if pts.shape[1] == 3:
+            pts = pts[:, :2] / pts[:, 2:]
+
+        assert pts.shape[1] == 2
+        
+        pts[:, 0] = pts[:, 0] * self.fx + self.cx
+        pts[:, 1] = pts[:, 1] * self.fy + self.cy
+        pts = pts.astype(np.int32)
+    
+        return pts
+
+    @classmethod
+    def from_fov_camera(cls, fov, aspect, resolution, near_plane, far_plane):
+        W = resolution
+        H = int(resolution / aspect)
+        cx = W / 2
+        cy = H / 2
+        fx = cx / np.tan(fov / 2)
+        fy = cy / np.tan(fov / 2)
+        
+        return cls(fx, fy, cx, cy, W, H, near_plane, far_plane)
+        
 
 
 def in_frustum(queries, normal, pts):
@@ -369,7 +408,7 @@ def get_c2ws_and_camera_info(cfg):
     return c2ws, camera_info, images, pts, rgb
 
 
-def get_c2ws_and_camera_info_test(cfg):
+def get_c2ws_and_camera_info_v1(cfg):
     console.print("[bold green]Loading camera info...")
     base = Path(cfg.data_dir)
     cam_bin = base / "colmap" / "sparse" / "0" / "cameras.bin"
@@ -377,7 +416,11 @@ def get_c2ws_and_camera_info_test(cfg):
     point_bin = base / "colmap" / "sparse" / "0" / "points3D.bin"
     points_cached = base / "colmap" / "sparse" / "0" / "points_and_rgb.pt"
     console.print("[bold green]Loading images...")
-    rot, t, _ = read_images_test(image_bin, cfg.image_dir)
+
+    tic()
+    rot, t, images = read_images_v1(image_bin, cfg.image_dir)
+    toc("read images v1")
+
     console.print("[bold green]Loading points...")
     if points_cached.exists():
         console.print("[bold green]Loading cached points...")
@@ -425,9 +468,6 @@ def get_c2ws_and_camera_info_test(cfg):
 
     camera_info.downsample(cfg.downsample)
 
-    N = rot.shape[0]
-    images = np.zeros([N, camera_info.h, camera_info.w, 3], dtype=np.float32)
-
     assert images.shape[0] == c2ws.shape[0]
     if (
         abs(camera_info.w - images.shape[2]) > 1
@@ -443,10 +483,9 @@ def get_c2ws_and_camera_info_test(cfg):
         camera_info.h = images.shape[1]
         camera_info.w = images.shape[2]
 
-    # console.print(
-    #     f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
-    # )
-    camera_info.print_camera_info()
+    console.print(
+        f"[blue underline]camera:\n\tfx: {camera_info.fx:.2f}; fy: {camera_info.fy:.2f}\n\tcx: {camera_info.cx:.2f}; cy: {camera_info.cy:.2f}\n\tH: {camera_info.h}; W: {camera_info.w}"
+    )
 
     if isinstance(pts, np.ndarray):
         pts = pts.astype(np.float32)

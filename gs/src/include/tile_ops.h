@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "culling.h"
 #include "data_spec.h"
 #include "kernels.h"
 #include <cub/cub.cuh>
@@ -224,13 +225,14 @@ __global__ void fill_tiledepth_bsphere_kernel_sm(
     if (intersect_tile_gaussian2d_bcircle(tile_topleft, tile_size, pixel_size_x,
                                           pixel_size_y, mean_ + i,
                                           g_radius[i])) {
-      cnt += 1;
       // tile_ids[2 * off] = global_id;
       // tile_depths[2 * off + 1] = depth[N_base + i];
       tile_ids[2 * off + 1] = global_id;
       tile_depths[2 * off] = depth[N_base + i];
-      off += 1;
+      assert(gaussian_ids[off] == 0);
       gaussian_ids[off] = N_base + i;
+      off += 1;
+      cnt += 1;
     }
   }
   tile_n_gaussians[global_id] += cnt;
@@ -253,7 +255,6 @@ void fill_tiledepth_bsphere_cuda(uint32_t N, int *gaussian_ids,
 #pragma unroll
   for (int i = 0; i < N; i += max_num_gaussians_sm) {
     uint32_t num_gaussians_sm = min(max_num_gaussians_sm, N - i);
-    // printf("num_gaussians_sm: %d\n", num_gaussians_sm);
     fill_tiledepth_bsphere_kernel_sm<<<n_blocks, N_THREADS,
                                        num_gaussians_sm * 3 * sizeof(float)>>>(
         N_base, num_gaussians_sm, gaussian_ids, tiledepth, depth,
@@ -261,7 +262,7 @@ void fill_tiledepth_bsphere_cuda(uint32_t N, int *gaussian_ids,
         n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y);
     cudaError_t last_error;
     checkLastCudaError(last_error);
-    // cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
     N_base += num_gaussians_sm;
   }
   return;
@@ -322,11 +323,11 @@ __global__ void fill_tiledepth_kernel_sm(
     if (intersect_tile_gaussian2d(tile_topleft, tile_size, pixel_size_x,
                                   pixel_size_y, g_mean + 2 * i, g_cov + 4 * i,
                                   thresh)) {
-      cnt += 1;
       tile_ids[2 * off + 1] = global_id;
       tile_depths[2 * off] = depth[N_base + i];
-      off += 1;
       gaussian_ids[off] = N_base + i;
+      off += 1;
+      cnt += 1;
     }
   }
   tile_n_gaussians[global_id] += cnt;
@@ -396,7 +397,18 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   int *unsorted_gaussian_ids;
   cudaCheck(
       cudaMalloc((void **)&unsorted_gaussian_ids, N_with_dub * sizeof(int)));
-  fill_tiledepth_bsphere_cuda(N, unsorted_gaussian_ids, tiledepth, depth,
+
+  // printf("n_tiles: %d\n", n_tiles);
+  // offset[n_tiles] = N_with_dub;
+  // printf("not this line\n");
+  // fflush(stdout);
+  // this memset is redundant, here for debugging
+  cudaCheck(cudaMemset(unsorted_gaussian_ids, 0, N_with_dub * sizeof(int)));
+  // fill_tiledepth_bsphere_cuda(N, unsorted_gaussian_ids, tiledepth, depth,
+  //                             tile_n_gaussians, offset, mean, radius,
+  //                             topleft, tile_size, n_tiles_h, n_tiles_w,
+  //                             pixel_size_x, pixel_size_y);
+  fill_tiledepth_bcircle_cuda(N, unsorted_gaussian_ids, tiledepth, depth,
                               tile_n_gaussians, offset, mean, radius, topleft,
                               tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
                               pixel_size_y);
@@ -457,6 +469,7 @@ void image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   int *unsorted_gaussian_ids;
   cudaCheck(
       cudaMalloc((void **)&unsorted_gaussian_ids, N_with_dub * sizeof(int)));
+  // offset[n_tiles] = N_with_dub;
   fill_tiledepth_cuda(N, unsorted_gaussian_ids, tiledepth, depth,
                       tile_n_gaussians, offset, mean, cov, topleft, tile_size,
                       n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, thresh);

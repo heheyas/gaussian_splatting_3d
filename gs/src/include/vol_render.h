@@ -109,26 +109,42 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
     cum_alpha_this_time = cum_alpha[local_id];
   }
 
+  // for (int i = 0; i < 1; ++i) {
   for (int i = 0; i < N_gaussians_this_time; ++i) {
     if (cum_alpha_this_time < thresh) {
       break;
     }
-    // TODO: add gaussian kernel here
-    // float coeff = alpha[i] * cum_alpha_this_time * gaussian_kernel_2d();
-    float coeff = alpha[i] * cum_alpha_this_time;
+    float alpha_ = fminf(alpha[i], 0.99f);
+    float coeff = alpha_ * cum_alpha_this_time;
     float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
     coeff *= val;
-    if (alpha[i] * val < MIN_RENDER_ALPHA) {
+    if (alpha_ * val < MIN_RENDER_ALPHA) {
       continue;
     }
-    // if (threadIdx.x == 0) {
-    //   printf("gaussian val: %f\n",
-    //          kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos));
+    // if (N_gaussians_this_time > 1 && threadIdx.x == 0) {
+    //   if (color[3 * i + 2] > 0.0f) {
+    //     printf("mean %f %f %f %f\n", mean[0], mean[1], mean[2], mean[3]);
+    //     printf("cov %f %f %f %f %f %f %f %f\n", cov[0], cov[1], cov[2],
+    //     cov[3],
+    //            cov[4], cov[5], cov[6], cov[7]);
+    //   }
+    // }
+    // color_this_time[0] += val * alpha[i];
+    // color_this_time[1] += val * alpha[i];
+    // color_this_time[2] += val * alpha[i];
+    // if (color_this_time[0] > 1.0f) {
+    //   printf("N gaussians: %d\n", N_gaussians_this_time);
+    //   printf("before: %f after: %f\n", color_this_time[0] - val * alpha[i],
+    //          color_this_time[0]);
+    //   printf("what the fuck %f\n", color_this_time[0]);
     // }
     color_this_time[0] += color[3 * i + 0] * coeff;
     color_this_time[1] += color[3 * i + 1] * coeff;
     color_this_time[2] += color[3 * i + 2] * coeff;
-    cum_alpha_this_time *= (1 - alpha[i] * val);
+    checkValue(color[3 * i + 0]);
+    checkValue(color[3 * i + 1]);
+    checkValue(color[3 * i + 2]);
+    cum_alpha_this_time *= (1 - alpha_ * val);
   }
 
 #pragma unroll
@@ -185,8 +201,9 @@ __device__ void vol_render_one_batch_backward(
     if (cum_alpha_this_time < thresh) {
       break;
     }
-    float alpha_ = alpha[i];
+    float alpha_ = fminf(alpha[i], 0.99f);
     float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
+    assert(G >= 0.0f && G <= 1.0f);
     if (alpha_ * G < MIN_RENDER_ALPHA) {
       continue;
     }
@@ -198,25 +215,37 @@ __device__ void vol_render_one_batch_backward(
     color_this_time[0] += color_this_gaussian[0]; // \sum alpha * T * G * C
     color_this_time[1] += color_this_gaussian[1];
     color_this_time[2] += color_this_gaussian[2];
-    float grad_g = (color_this_gaussian[0] * grad_out_this_pixel[0] +
-                    color_this_gaussian[1] * grad_out_this_pixel[1] +
-                    color_this_gaussian[2] * grad_out_this_pixel[2]) *
-                   alpha_;
-
-    kernel_gaussian_2d_backward(mean + 2 * i, cov + 4 * i, pos,
-                                grad_mean + 2 * i, grad_cov + 4 * i, grad_g);
     atomicAdd(grad_color + 3 * i, coeff * grad_out_this_pixel[0]);
     atomicAdd(grad_color + 3 * i + 1, coeff * grad_out_this_pixel[1]);
     atomicAdd(grad_color + 3 * i + 2, coeff * grad_out_this_pixel[2]);
-    float grad_alpha_local = 0.0f;
+
+    double partial_aG = 0.0;
+    assert(1 - alpha_ * G >= 0.01f);
 #pragma unroll
     for (int j = 0; j < 3; ++j) {
-      grad_alpha_local += color_this_gaussian[j] * grad_out_this_pixel[j] /
-                          (alpha_)-G *
-                          (final[3 * local_id + j] - color_this_time[j]) /
-                          (1.0f - alpha_ * G) * grad_out_this_pixel[j];
+      checkValue(color[3 * i + j] * cum_alpha_this_time);
+      if (isnan(color[3 * i + j] * cum_alpha_this_time) ||
+          isinf(color[3 * i + j] * cum_alpha_this_time)) {
+        printf("color: %f, cum_alpha: %f\n", color[3 * i + j],
+               cum_alpha_this_time);
+      }
+      // checkValue((final[3 * local_id + j] - color_this_time[j]) /
+      //            (1 - alpha_ * G));
+      partial_aG +=
+          (color[3 * i + j] * cum_alpha_this_time -
+           (final[3 * local_id + j] - color_this_time[j]) / (1 - alpha_ * G)) *
+          grad_out_this_pixel[j];
     }
-    atomicAdd(grad_alpha + i, grad_alpha_local);
+    // checkValue(partial_aG);
+    // checkValue(partial_aG * alpha_ * G);
+    // checkValue(partial_aG * alpha_);
+    // kernel_gaussian_2d_backward(mean + 2 * i, cov + 4 * i, pos,
+    //                             grad_mean + 2 * i, grad_cov + 4 * i,
+    //                             partial_aG * alpha_ * G);
+    kernel_gaussian_2d_backward(mean + 2 * i, cov + 4 * i, pos,
+                                grad_mean + 2 * i, grad_cov + 4 * i,
+                                partial_aG * alpha_ * G);
+    atomicAdd(grad_alpha + i, partial_aG * G);
     cum_alpha_this_time *= (1 - alpha_ * G);
   }
 
@@ -368,6 +397,21 @@ __global__ void tile_based_vol_rendering_backward_entry(
     __syncthreads();
     gaussian_ids += num_gaussian_sm;
   }
+  if (global_x >= W || global_y >= H) {
+    return;
+  }
+  if (out_rgb[3 * (global_y * W + global_x) + 0] != sm_out[3 * local_id + 0]) {
+    printf("out_rgb[3 * (global_y * W + global_x) + 0] = %f, sm_out[3 * "
+           "local_id + 0] = %f\n",
+           out_rgb[3 * (global_y * W + global_x) + 0],
+           sm_out[3 * local_id + 0]);
+  }
+  assert(out_rgb[3 * (global_y * W + global_x) + 0] ==
+         sm_out[3 * local_id + 0]);
+  assert(out_rgb[3 * (global_y * W + global_x) + 1] ==
+         sm_out[3 * local_id + 1]);
+  assert(out_rgb[3 * (global_y * W + global_x) + 2] ==
+         sm_out[3 * local_id + 2]);
 }
 
 // TODO: add backward compatibility

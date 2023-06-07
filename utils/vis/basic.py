@@ -85,6 +85,8 @@ def draw_heatmap_of_num_gaussians_per_tile(
 
     cv2.imwrite(f"./tmp/{filename}.png", img)
 
+    return img
+
 
 def draw_heatmap_of_num_gaussians_per_tile_with_offset(
     filename, tile_size, offset, n_tile_h, n_tile_w, H, W, use_visdom=True

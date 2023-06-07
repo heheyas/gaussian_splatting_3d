@@ -16,5 +16,9 @@
         "limits": "cpp",
         "algorithm": "cpp"
     },
-    "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs"
+    "cmake.sourceDirectory": "/opt/czl/nerf/gs/gs",
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "python.formatting.provider": "none"
 }

@@ -237,6 +237,38 @@ __device__ bool intersect_tile_gaussian2d(float2 &topleft, uint32_t tile_size,
   return max_val > thresh;
 }
 
+__device__ float dist_point_lineseg(float x, float y, float x1, float x2,
+                                    float y1, float y2) {
+  float A = x - x1;
+  float B = y - y1;
+  float C = x2 - x1;
+  float D = y2 - y1;
+
+  float dot = A * C + B * D;
+  float len_sq = C * C + D * D;
+  float param = -1;
+
+  if (len_sq != 0) // in case of 0 length line
+    param = dot / len_sq;
+
+  float xx, yy;
+
+  if (param < 0) {
+    xx = x1;
+    yy = y1;
+  } else if (param > 1) {
+    xx = x2;
+    yy = y2;
+  } else {
+    xx = x1 + param * C;
+    yy = y1 + param * D;
+  }
+
+  float dx = x - xx;
+  float dy = y - yy;
+  return sqrtf(dx * dx + dy * dy);
+}
+
 __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
                                                   uint32_t tile_size,
                                                   float pixel_size_x,
@@ -253,21 +285,38 @@ __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
 
   float2 pxy = make_float2(px, py);
   float2 nearest;
-  if (rela.x * (rela.x + px) < 0) {
-    nearest.x = rela.x;
-  } else {
-    nearest.x = rela.x > 0 ? px : 0;
-  }
-  if (rela.y * (rela.y + py) < 0) {
-    nearest.y = rela.y;
-  } else {
-    nearest.y = rela.y > 0 ? py : 0;
-  }
+  // if (rela.x * (rela.x + px) < 0) {
+  //   nearest.x = rela.x;
+  // } else {
+  //   nearest.x = rela.x > 0 ? px : 0;
+  // }
+  // if (rela.y * (rela.y + py) < 0) {
+  //   nearest.y = rela.y;
+  // } else {
+  //   nearest.y = rela.y > 0 ? py : 0;
+  // }
+  // if (rela.x * (px - rela.x) < 0.0f) {
+  //   nearest.x = rela.x;
+  // } else {
+  //   nearest.x = rela.x > 0.0f ? px : 0.0f;
+  // }
+  // if (rela.y * (py - rela.y) < 0.0f) {
+  //   nearest.y = rela.y;
+  // } else {
+  //   nearest.y = rela.y > 0.0f ? py : 0.0f;
+  // }
+  float d1, d2, d3, d4;
+  d1 = dist_point_lineseg(rela.x, rela.y, 0.0f, px, 0.0f, 0.0f);
+  d2 = dist_point_lineseg(rela.x, rela.y, 0.0f, px, py, py);
+  d3 = dist_point_lineseg(rela.x, rela.y, 0.0f, 0.0f, 0.0f, py);
+  d4 = dist_point_lineseg(rela.x, rela.y, px, px, 0.0f, py);
+  float d = fminf(fminf(d1, d2), fminf(d3, d4));
   // printf("gaussian value: %.2f\n", gaussian_kernel_2d(rela, cov_inv,
   // nearest));
-  float R = sqrtf(dot(rela - nearest, rela - nearest));
+  // float R = sqrtf(dot(rela - nearest, rela - nearest));
   // printf("R: %.2f; radius: %.2f\n", R, radius);
-  return dot(rela - nearest, rela - nearest) < radius * radius;
+  // return dot(rela - nearest, rela - nearest) < radius * radius;
+  return d < radius;
 }
 
 // __host__ __device__ inline float kernel_gaussian_2d(float2 &mean, float4
@@ -284,19 +333,25 @@ __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
 __device__ inline void
 kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
                             float *grad_mean, float *grad_cov, float grad) {
-  float det = cov[0] * cov[3] - cov[1] * cov[2];
-  float2 x = make_float2(query[0] - mean[0], query[1] - mean[1]);
-  float2 tmp =
-      make_float2(x.x * cov[3] - x.y * cov[2], -x.x * cov[1] + x.y * cov[0]) /
-      det;
-  // float val = expf(-0.5f * dot(tmp, x));
-  float val = 1.0f;
+  // nan
+  double d_grad = (double)grad;
+  double c0 = (double)cov[0];
+  double c1 = (double)cov[1];
+  double c2 = (double)cov[2];
+  double c3 = (double)cov[3];
+  double det = c0 * c3 - c1 * c2;
+  double x = query[0] - mean[0];
+  double y = query[1] - mean[1];
+  double tmpx = (x * c3 - y * c2) / det;
+  double tmpy = (-x * c1 + y * c0) / det;
   // note: val has been multiplied in the grad
   // atomic ops here
-  atomicAdd(grad_mean, grad * val * tmp.x);
-  atomicAdd(grad_mean + 1, grad * val * tmp.y);
-  atomicAdd(grad_cov, 0.5f * grad * val * tmp.x * tmp.x);
-  atomicAdd(grad_cov + 1, 0.5f * grad * val * tmp.x * tmp.y);
-  atomicAdd(grad_cov + 2, 0.5f * grad * val * tmp.y * tmp.x);
-  atomicAdd(grad_cov + 3, 0.5f * grad * val * tmp.y * tmp.y);
+  checkValue((float)(d_grad * tmpx));
+  checkValue((float)(d_grad * tmpy * tmpy));
+  atomicAdd(grad_mean, (float)(d_grad * tmpx));
+  atomicAdd(grad_mean + 1, (float)(d_grad * tmpy));
+  atomicAdd(grad_cov, 0.5 * (float)(d_grad * tmpx * tmpx));
+  atomicAdd(grad_cov + 1, 0.5 * (float)(d_grad * tmpx * tmpy));
+  atomicAdd(grad_cov + 2, 0.5 * (float)(d_grad * tmpy * tmpx));
+  atomicAdd(grad_cov + 3, 0.5 * (float)(d_grad * tmpy * tmpy));
 }

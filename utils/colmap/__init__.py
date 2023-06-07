@@ -6,12 +6,16 @@ from tqdm import tqdm
 from .read import read_points3D_binary, read_cameras_binary, read_images_binary
 import time
 import multiprocessing as mp
+import torch
+from utils.misc import tic, toc
 
 
-def read_one_image(filename):
+def read_one_image(filename, conversion=True):
     filename = str(filename)
     img = cv2.imread(filename)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    if conversion:
+        img = img.astype(np.float32) / 255.0
 
     return img
 
@@ -118,7 +122,40 @@ def read_images(filename, image_base_dir):
 
     return np.array(rot), np.array(T), imgs
 
-    
+
+def read_images_v1(filename, image_base_dir):
+    if not isinstance(filename, str):
+        filename = str(filename)
+    images = read_images_binary(filename)
+    image_base_dir = Path(image_base_dir)
+    rot = []
+    T = []
+    N = len(images)
+
+    test_img = read_one_image(image_base_dir / list(images.values())[0].name)
+    H, W = test_img.shape[:2]
+    # imgs = np.empty([N, H, W, 3], dtype=np.uint8)
+    imgs = np.empty([N, H, W, 3], dtype=np.uint8)
+
+    tic()
+    for idx, img in tqdm(enumerate(images.values())):
+        rot.append(img.qvec2rotmat())
+        T.append(img.tvec)
+        imgs[idx] = read_one_image(image_base_dir / img.name, conversion=False)
+    toc("in [read image v1] load")
+
+    tic()
+    imgs = torch.from_numpy(imgs).to(torch.float32) / 255.0
+    toc("type conversion")
+
+    tic()
+    rot = np.array(rot)
+    T = np.array(T)
+    toc("list to np.ndarray")
+
+    return rot, T, imgs
+
+
 def read_images_test(filename, image_base_dir):
     # return an empty np.array for image
     if not isinstance(filename, str):

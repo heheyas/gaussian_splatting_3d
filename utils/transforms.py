@@ -37,6 +37,10 @@ def qsvec2rotmat_batched(
 
     # TODO: check which I current think that scale should be copied row-wise since in eq (6) the S matrix is right-hand multplied to R
     rotmat = svec.unsqueeze(-2) * unscaled_rotmat
+    # rotmat = svec.unsqueeze(-1) * unscaled_rotmat
+    # rotmat = torch.bmm(unscaled_rotmat, torch.diag(svec))
+
+    # print("rotmat", rotmat.shape)
 
     return rotmat
 
@@ -44,4 +48,9 @@ def qsvec2rotmat_batched(
 def rotmat2wxyz(rotmat):
     return kornia.geometry.conversions.rotation_matrix_to_quaternion(
         rotmat, order=QuaternionCoeffOrder.WXYZ
+    )
+
+def qvec2rotmat_batched(qvec: TensorType["N", 4]):
+    return kornia.geometry.conversions.quaternion_to_rotation_matrix(
+        qvec, QuaternionCoeffOrder.WXYZ
     )

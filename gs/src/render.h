@@ -34,6 +34,22 @@ void tile_based_vol_rendering(Tensor mean, Tensor cov, Tensor color,
                               float pixel_size_x, float pixel_size_y,
                               uint32_t H, uint32_t W, float thresh);
 
+void tile_based_vol_rendering_v1(Tensor mean, Tensor cov, Tensor color,
+                                 Tensor alpha, Tensor offset,
+                                 Tensor gaussian_ids, Tensor out,
+                                 Tensor topleft, uint32_t tile_size,
+                                 uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                 float pixel_size_x, float pixel_size_y,
+                                 uint32_t H, uint32_t W, float thresh);
+
+void tile_based_vol_rendering_v2(Tensor mean, Tensor cov, Tensor color,
+                                 Tensor alpha, Tensor offset,
+                                 Tensor gaussian_ids, Tensor out,
+                                 Tensor topleft, uint32_t tile_size,
+                                 uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                 float pixel_size_x, float pixel_size_y,
+                                 uint32_t H, uint32_t W, float thresh);
+
 void tile_based_vol_rendering_backward(
     Tensor mean, Tensor cov, Tensor color, Tensor alpha, Tensor offset,
     Tensor gaussian_ids, Tensor out, Tensor grad_mean, Tensor grad_cov,
@@ -41,3 +57,7 @@ void tile_based_vol_rendering_backward(
     uint32_t tile_size, uint32_t n_tiles_h, uint32_t n_tiles_w,
     float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t W,
     float thresh);
+
+void tile_culling_aabb(Tensor aabb_topleft, Tensor aabb_bottomright,
+                       Tensor gaussian_ids, Tensor offset, Tensor depth,
+                       uint32_t n_tiles_h, uint32_t n_tiles_w);

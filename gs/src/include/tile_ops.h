@@ -424,7 +424,9 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
 
   Timer.Start();
   int64_t *keys = reinterpret_cast<int64_t *>(tiledepth);
-  cudaCheck(cudaFree(d_temp_storage));
+  if (d_temp_storage) {
+    cudaCheck(cudaFree(d_temp_storage));
+  }
   d_temp_storage = NULL;
   temp_storage_bytes = 0;
   cudaCheck(cub::DeviceRadixSort::SortPairs(
@@ -439,9 +441,15 @@ void prepare_image_sort_cuda(uint32_t N, uint32_t N_with_dub, int *gaussian_ids,
   // printf("[CUDA] in [prepare_image_sort] Sorting time: %f ms\n",
   //  Timer.Elapsed());
 
-  cudaCheck(cudaFree(sorted_keys));
-  cudaCheck(cudaFree(unsorted_gaussian_ids));
-  cudaCheck(cudaFree(d_temp_storage));
+  if (sorted_keys) {
+    cudaCheck(cudaFree(sorted_keys));
+  }
+  if (unsorted_gaussian_ids) {
+    cudaCheck(cudaFree(unsorted_gaussian_ids));
+  }
+  if (d_temp_storage) {
+    cudaCheck(cudaFree(d_temp_storage));
+  }
 
   return;
 }

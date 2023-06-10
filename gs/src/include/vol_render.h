@@ -47,6 +47,19 @@ __device__ __forceinline__ void carry_back(uint32_t N, uint32_t dsize,
   }
 }
 
+__device__ __forceinline__ void direct_carry(uint32_t N, uint32_t dsize,
+                                             int *sm, int *gm) {
+  int local_id = threadIdx.x;
+  int n_turns = (dsize * N) / blockDim.x;
+  int n_left = (dsize * N) % blockDim.x;
+  for (int i = 0; i < n_turns; i++) {
+    sm[local_id + i * blockDim.x] = gm[local_id + i * blockDim.x];
+  }
+  if (local_id < n_left) {
+    sm[local_id + n_turns * blockDim.x] = gm[local_id + n_turns * blockDim.x];
+  }
+}
+
 __device__ __forceinline__ void carry_tile3(uint32_t N, float *sm, float *gm,
                                             const uint32_t tile_size,
                                             const uint32_t W) {
@@ -152,6 +165,89 @@ vol_render_one_batch(uint32_t N_gaussians_this_time, float *mean, float *cov,
     out[3 * local_id + i] = color_this_time[i];
   }
   cum_alpha[local_id] = cum_alpha_this_time;
+}
+
+__device__ void vol_render_one_batch_v1(uint32_t N_gaussians_this_time,
+                                        float *mean, float *cov, float *color,
+                                        float *alpha, float *out,
+                                        float &cum_alpha, float *topleft,
+                                        uint32_t tile_size, uint32_t n_tiles_h,
+                                        uint32_t n_tiles_w, float pixel_size_x,
+                                        float pixel_size_y, uint32_t H,
+                                        uint32_t W, float thresh, bool first) {
+  int local_id = threadIdx.x;
+  // check row major here
+  int local_y = local_id / tile_size;
+  int local_x = local_id % tile_size;
+  int global_y = blockIdx.y * tile_size + local_y;
+  int global_x = blockIdx.x * tile_size + local_x;
+  if (global_y >= H || global_x >= W) {
+    return;
+  }
+  // float color_this_time[3];
+  // float cum_alpha_this_time;
+
+  float pos[2] = {topleft[0] + global_x * pixel_size_x,
+                  topleft[1] + global_y * pixel_size_y};
+
+  //   if (first) {
+  // #pragma unroll
+  //     for (int i = 0; i < 3; ++i) {
+  //       color_this_time[i] = 0.0f;
+  //     }
+  //     cum_alpha_this_time = 1.0f;
+  //   } else {
+  // #pragma unroll
+  //     for (int i = 0; i < 3; ++i) {
+  //       // check bank conflict here
+  //       color_this_time[i] = out[3 * local_id + i];
+  //     }
+  //     cum_alpha_this_time = cum_alpha[local_id];
+  //   }
+
+  // for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < N_gaussians_this_time; ++i) {
+    if (cum_alpha < thresh) {
+      break;
+    }
+    float alpha_ = fminf(alpha[i], 0.99f);
+    float coeff = alpha_ * cum_alpha;
+    float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
+    coeff *= val;
+    if (alpha_ * val < MIN_RENDER_ALPHA) {
+      continue;
+    }
+    // if (N_gaussians_this_time > 1 && threadIdx.x == 0) {
+    //   if (color[3 * i + 2] > 0.0f) {
+    //     printf("mean %f %f %f %f\n", mean[0], mean[1], mean[2], mean[3]);
+    //     printf("cov %f %f %f %f %f %f %f %f\n", cov[0], cov[1], cov[2],
+    //     cov[3],
+    //            cov[4], cov[5], cov[6], cov[7]);
+    //   }
+    // }
+    // color_this_time[0] += val * alpha[i];
+    // color_this_time[1] += val * alpha[i];
+    // color_this_time[2] += val * alpha[i];
+    // if (color_this_time[0] > 1.0f) {
+    //   printf("N gaussians: %d\n", N_gaussians_this_time);
+    //   printf("before: %f after: %f\n", color_this_time[0] - val * alpha[i],
+    //          color_this_time[0]);
+    //   printf("what the fuck %f\n", color_this_time[0]);
+    // }
+    out[0] += color[3 * i + 0] * coeff;
+    out[1] += color[3 * i + 1] * coeff;
+    out[2] += color[3 * i + 2] * coeff;
+    checkValue(color[3 * i + 0]);
+    checkValue(color[3 * i + 1]);
+    checkValue(color[3 * i + 2]);
+    cum_alpha *= (1 - alpha_ * val);
+  }
+
+  // #pragma unroll
+  //   for (int i = 0; i < 3; ++i) {
+  //     out[3 * local_id + i] = color_this_time[i];
+  //   }
+  //   cum_alpha[local_id] = cum_alpha_this_time;
 }
 
 __device__ void vol_render_one_batch_backward(
@@ -316,6 +412,131 @@ __global__ void tile_based_vol_rendering_entry(
   /* test kernel 2d */
 }
 
+__global__ void tile_based_vol_rendering_entry_v1(
+    uint32_t N, uint32_t N_with_dub, float *mean, float *cov, float *color,
+    float *alpha, int *offset, int *gaussian_ids, float *out_rgb,
+    float *topleft, uint32_t tile_size, uint32_t n_tiles_h, uint32_t n_tiles_w,
+    float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t W,
+    float thresh) {
+  int local_id = threadIdx.x;
+  int local_y = local_id / tile_size;
+  int local_x = local_id % tile_size;
+  int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
+  int n_gaussians_this_tile = offset[tile_id + 1] - offset[tile_id];
+  if (n_gaussians_this_tile == 0) {
+    return;
+  }
+
+  // compute memory need for this tile
+  int n_float_per_gaussian = 2 + 4 + 3 + 1;
+  // mean + cov + color + alpha
+  int n_pixel_per_tile = tile_size * tile_size;
+  // int n_float_per_pixel = 3 + 1;
+  // output rgb + cum_alpha
+  int max_gaussian_sm = (MAX_N_FLOAT_SM) / n_float_per_gaussian;
+  __shared__ float sm[MAX_N_FLOAT_SM];
+  float *sm_mean = sm;
+  float *sm_cov = sm_mean + 2 * max_gaussian_sm;
+  float *sm_color = sm_cov + 4 * max_gaussian_sm;
+  float *sm_alpha = sm_color + 3 * max_gaussian_sm;
+  // float *sm_cum_alpha = sm_alpha + 1 * max_gaussian_sm;
+  // float *sm_out = sm_cum_alpha + 1 * n_pixel_per_tile;
+
+  float out[3] = {0.0f, 0.0f, 0.0f};
+  float cum_alpha = 1.0f;
+
+  gaussian_ids += offset[tile_id];
+
+  for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
+    int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
+    carry(num_gaussian_sm, 2, sm_mean, mean, offset, gaussian_ids);
+    carry(num_gaussian_sm, 4, sm_cov, cov, offset, gaussian_ids);
+    carry(num_gaussian_sm, 3, sm_color, color, offset, gaussian_ids);
+    carry(num_gaussian_sm, 1, sm_alpha, alpha, offset, gaussian_ids);
+    __syncthreads();
+    vol_render_one_batch_v1(num_gaussian_sm, sm_mean, sm_cov, sm_color,
+                            sm_alpha, out, cum_alpha, topleft, tile_size,
+                            n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
+                            W, thresh, n == 0);
+    __syncthreads();
+    gaussian_ids += num_gaussian_sm;
+  }
+  int global_y = blockIdx.y * tile_size + local_y;
+  int global_x = blockIdx.x * tile_size + local_x;
+  if (global_y >= H || global_x >= W) {
+    return;
+  }
+  out_rgb[3 * (global_y * W + global_x) + 0] = out[0];
+  out_rgb[3 * (global_y * W + global_x) + 1] = out[1];
+  out_rgb[3 * (global_y * W + global_x) + 2] = out[2];
+
+  /* test kernel 2d */
+}
+
+__global__ void tile_based_vol_rendering_entry_v2(
+    uint32_t N, uint32_t N_with_dub, float *mean, float *cov, float *color,
+    float *alpha, int *offset, int *gaussian_ids, float *out_rgb,
+    float *topleft, uint32_t tile_size, uint32_t n_tiles_h, uint32_t n_tiles_w,
+    float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t W,
+    float thresh) {
+  int local_id = threadIdx.x;
+  int local_y = local_id / tile_size;
+  int local_x = local_id % tile_size;
+  int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
+  int n_gaussians_this_tile = offset[tile_id + 1] - offset[tile_id];
+  if (n_gaussians_this_tile == 0) {
+    return;
+  }
+
+  // compute memory need for this tile
+  int n_float_per_gaussian = 2 + 4 + 3 + 1 + 1;
+  // mean + cov + color + alpha + gaussian_ids
+  int n_pixel_per_tile = tile_size * tile_size;
+  // int n_float_per_pixel = 3 + 1;
+  // output rgb + cum_alpha
+  int max_gaussian_sm = (MAX_N_FLOAT_SM) / n_float_per_gaussian;
+  __shared__ float sm[MAX_N_FLOAT_SM];
+  float *sm_mean = sm;
+  float *sm_cov = sm_mean + 2 * max_gaussian_sm;
+  float *sm_color = sm_cov + 4 * max_gaussian_sm;
+  float *sm_alpha = sm_color + 3 * max_gaussian_sm;
+  int *sm_gaussian_ids =
+      reinterpret_cast<int *>(sm_alpha + 1 * max_gaussian_sm);
+  // float *sm_cum_alpha = sm_alpha + 1 * max_gaussian_sm;
+  // float *sm_out = sm_cum_alpha + 1 * n_pixel_per_tile;
+
+  float out[3] = {0.0f, 0.0f, 0.0f};
+  float cum_alpha = 1.0f;
+
+  gaussian_ids += offset[tile_id];
+
+  for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
+    int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
+    direct_carry(num_gaussian_sm, 1, sm_gaussian_ids, gaussian_ids);
+    carry(num_gaussian_sm, 2, sm_mean, mean, offset, sm_gaussian_ids);
+    carry(num_gaussian_sm, 4, sm_cov, cov, offset, sm_gaussian_ids);
+    carry(num_gaussian_sm, 3, sm_color, color, offset, sm_gaussian_ids);
+    carry(num_gaussian_sm, 1, sm_alpha, alpha, offset, sm_gaussian_ids);
+    __syncthreads();
+    vol_render_one_batch_v1(num_gaussian_sm, sm_mean, sm_cov, sm_color,
+                            sm_alpha, out, cum_alpha, topleft, tile_size,
+                            n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
+                            W, thresh, n == 0);
+    __syncthreads();
+    gaussian_ids += num_gaussian_sm;
+  }
+  int global_y = blockIdx.y * tile_size + local_y;
+  int global_x = blockIdx.x * tile_size + local_x;
+  if (global_y >= H || global_x >= W) {
+    return;
+  }
+  out_rgb[3 * (global_y * W + global_x) + 0] = out[0];
+  out_rgb[3 * (global_y * W + global_x) + 1] = out[1];
+  out_rgb[3 * (global_y * W + global_x) + 2] = out[2];
+
+  /* test kernel 2d */
+}
+
 __global__ void tile_based_vol_rendering_backward_entry(
     uint32_t N, uint32_t N_with_dub, float *mean, float *cov, float *color,
     float *alpha, int *offset, int *gaussian_ids, float *out_rgb,
@@ -374,11 +595,13 @@ __global__ void tile_based_vol_rendering_backward_entry(
     set_zero(4 * num_gaussian_sm, sm_grad_cov);
     set_zero(3 * num_gaussian_sm, sm_grad_color);
     set_zero(1 * num_gaussian_sm, sm_grad_alpha);
+    if (global_x < W && global_y < H) {
 #pragma unroll
-    for (size_t i = 0; i < 3; ++i) {
-      sm_grad_out[3 * local_id + i] =
-          grad_out[3 * (global_y * W + global_x) + i];
-      sm_final[3 * local_id + i] = out_rgb[3 * (global_y * W + global_x) + i];
+      for (size_t i = 0; i < 3; ++i) {
+        sm_grad_out[3 * local_id + i] =
+            grad_out[3 * (global_y * W + global_x) + i];
+        sm_final[3 * local_id + i] = out_rgb[3 * (global_y * W + global_x) + i];
+      }
     }
     __syncthreads();
     vol_render_one_batch_backward(
@@ -427,6 +650,44 @@ void tile_based_vol_rendering_cuda(uint32_t N, uint32_t N_with_dub, float *mean,
   const dim3 block(n_tiles_w, n_tiles_h, 1);
   const int n_pixel_per_tile = tile_size * tile_size;
   tile_based_vol_rendering_entry<<<block, n_pixel_per_tile>>>(
+      N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
+      topleft, tile_size, n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
+      W, thresh);
+
+  cudaError_t last_error;
+  checkLastCudaError(last_error);
+}
+
+void tile_based_vol_rendering_cuda_v1(uint32_t N, uint32_t N_with_dub,
+                                      float *mean, float *cov, float *color,
+                                      float *alpha, int *offset,
+                                      int *gaussian_ids, float *out_rgb,
+                                      float *topleft, uint32_t tile_size,
+                                      uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                      float pixel_size_x, float pixel_size_y,
+                                      uint32_t H, uint32_t W, float thresh) {
+  const dim3 block(n_tiles_w, n_tiles_h, 1);
+  const int n_pixel_per_tile = tile_size * tile_size;
+  tile_based_vol_rendering_entry_v1<<<block, n_pixel_per_tile>>>(
+      N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
+      topleft, tile_size, n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
+      W, thresh);
+
+  cudaError_t last_error;
+  checkLastCudaError(last_error);
+}
+
+void tile_based_vol_rendering_cuda_v2(uint32_t N, uint32_t N_with_dub,
+                                      float *mean, float *cov, float *color,
+                                      float *alpha, int *offset,
+                                      int *gaussian_ids, float *out_rgb,
+                                      float *topleft, uint32_t tile_size,
+                                      uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                      float pixel_size_x, float pixel_size_y,
+                                      uint32_t H, uint32_t W, float thresh) {
+  const dim3 block(n_tiles_w, n_tiles_h, 1);
+  const int n_pixel_per_tile = tile_size * tile_size;
+  tile_based_vol_rendering_entry_v2<<<block, n_pixel_per_tile>>>(
       N, N_with_dub, mean, cov, color, alpha, offset, gaussian_ids, out_rgb,
       topleft, tile_size, n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H,
       W, thresh);

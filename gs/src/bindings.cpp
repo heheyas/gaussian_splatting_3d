@@ -18,4 +18,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Tile based volume rendering backward");
   m.def("debug_check_tiledepth", &debug_check_tiledepth,
         "(DEBUG) check tile and depth");
+  m.def("tile_culling_aabb", &tile_culling_aabb, "Tile culling with AABB");
+  m.def("tile_based_vol_rendering_v1", &tile_based_vol_rendering_v1,
+        "Tile based volume rendering v1 which uses out[3] and cum_alpha in "
+        "local var instead of scratchpad memory");
+  m.def("tile_based_vol_rendering_v2", &tile_based_vol_rendering_v2,
+        "Tile based volume rendering v2 which uses out[3] and cum_alpha in "
+        "local var instead of scratchpad memory and further carry gaussian_ids "
+        "into scatchpad memory");
 }

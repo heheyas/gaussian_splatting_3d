@@ -8,8 +8,8 @@ device: cuda:0
 # data
 data_name: garden
 data_dir: ./data/garden
-image_dir: ./data/garden/images_4
-downsample: 4
+image_dir: ./data/garden/images_2
+downsample: 2
 save_iteration: 1000
 
 # renderer
@@ -19,12 +19,12 @@ far_plane: 1000.0
 tile_culling_type: bcircle
 tile_culling_thresh: 0.01
 frustum_culling_radius: 1.0
-tile_culling_radius: 3.0
+tile_culling_radius: 4.0
 
 # model
 random_init: False
 max_iteration: 10000
-lr: 1e-2
+lr: 1e-3
 alpha_init: 0.5
 svec_init: 0.02
 loss_fn: l2

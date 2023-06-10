@@ -294,7 +294,10 @@ class CameraInfo:
         
         pts[:, 0] = pts[:, 0] * self.fx + self.cx
         pts[:, 1] = pts[:, 1] * self.fy + self.cy
-        pts = pts.astype(np.int32)
+        if isinstance(pts, np.ndarray):
+            pts = pts.astype(np.int32)
+        elif isinstance(pts, torch.Tensor):
+            pts = pts.to(torch.int32)
     
         return pts
 

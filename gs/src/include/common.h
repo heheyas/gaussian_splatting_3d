@@ -41,6 +41,16 @@
   TORCH_CHECK(x.scalar_type() == at::ScalarType::Double,                       \
               #x " must be a floating tensor")
 
+#define CHECK_DC_FLOAT(x)                                                      \
+  CHECK_CUDA(x);                                                               \
+  CHECK_CONTIGUOUS(x);                                                         \
+  CHECK_IS_FLOATING(x)
+
+#define CHECK_DC_INT(x)                                                        \
+  CHECK_CUDA(x);                                                               \
+  CHECK_CONTIGUOUS(x);                                                         \
+  CHECK_IS_INT(x)
+
 #define checkLastCudaError(error)                                              \
   error = cudaGetLastError();                                                  \
   if (error != cudaSuccess) {                                                  \

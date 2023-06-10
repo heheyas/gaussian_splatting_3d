@@ -28,7 +28,10 @@ console = Console()
 def main(cfg):
     os.chdir(hydra.utils.get_original_cwd())
     renderer = MockRenderer(cfg).to(cfg.device)
-    renderer.test_basic_alias()
+    # renderer.test_basic_alias()
+    # renderer.test_aabb()
+    method = f"renderer.{cfg.fn}"
+    eval(method)()
 
 
 if __name__ == "__main__":

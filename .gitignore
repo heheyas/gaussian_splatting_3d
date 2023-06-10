@@ -166,3 +166,4 @@ tmp/
 outputs/
 log/
 logs/
+.vscode

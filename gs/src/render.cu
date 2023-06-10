@@ -1,3 +1,4 @@
+#include "aabb_culling.h"
 #include "common.h"
 #include "culling.h"
 #include "data_spec.h"
@@ -210,6 +211,90 @@ void tile_based_vol_rendering(Tensor mean, Tensor cov, Tensor color,
       pixel_size_y, H, W, thresh);
 }
 
+void tile_based_vol_rendering_v1(Tensor mean, Tensor cov, Tensor color,
+                                 Tensor alpha, Tensor offset,
+                                 Tensor gaussian_ids, Tensor out,
+                                 Tensor topleft, uint32_t tile_size,
+                                 uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                 float pixel_size_x, float pixel_size_y,
+                                 uint32_t H, uint32_t W, float thresh) {
+  CHECK_CUDA(mean);
+  CHECK_CUDA(cov);
+  CHECK_CUDA(color);
+  CHECK_CUDA(alpha);
+  CHECK_CUDA(offset);
+  CHECK_CUDA(gaussian_ids);
+  CHECK_CUDA(out);
+  CHECK_CUDA(topleft);
+  CHECK_CONTIGUOUS(mean);
+  CHECK_CONTIGUOUS(cov);
+  CHECK_CONTIGUOUS(color);
+  CHECK_CONTIGUOUS(alpha);
+  CHECK_CONTIGUOUS(offset);
+  CHECK_CONTIGUOUS(gaussian_ids);
+  CHECK_CONTIGUOUS(out);
+  CHECK_CONTIGUOUS(topleft);
+  CHECK_IS_FLOATING(mean);
+  CHECK_IS_FLOATING(cov);
+  CHECK_IS_FLOATING(color);
+  CHECK_IS_FLOATING(alpha);
+  CHECK_IS_INT(offset);
+  CHECK_IS_INT(gaussian_ids);
+  CHECK_IS_FLOATING(out);
+  CHECK_IS_FLOATING(topleft);
+  uint32_t N = mean.size(0);
+  uint32_t N_with_dub = gaussian_ids.size(0);
+  //   printf("tile_based_vol_rendering\n");
+  tile_based_vol_rendering_cuda_v1(
+      N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+      color.data_ptr<float>(), alpha.data_ptr<float>(), offset.data_ptr<int>(),
+      gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+      topleft.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+      pixel_size_y, H, W, thresh);
+}
+
+void tile_based_vol_rendering_v2(Tensor mean, Tensor cov, Tensor color,
+                                 Tensor alpha, Tensor offset,
+                                 Tensor gaussian_ids, Tensor out,
+                                 Tensor topleft, uint32_t tile_size,
+                                 uint32_t n_tiles_h, uint32_t n_tiles_w,
+                                 float pixel_size_x, float pixel_size_y,
+                                 uint32_t H, uint32_t W, float thresh) {
+  CHECK_CUDA(mean);
+  CHECK_CUDA(cov);
+  CHECK_CUDA(color);
+  CHECK_CUDA(alpha);
+  CHECK_CUDA(offset);
+  CHECK_CUDA(gaussian_ids);
+  CHECK_CUDA(out);
+  CHECK_CUDA(topleft);
+  CHECK_CONTIGUOUS(mean);
+  CHECK_CONTIGUOUS(cov);
+  CHECK_CONTIGUOUS(color);
+  CHECK_CONTIGUOUS(alpha);
+  CHECK_CONTIGUOUS(offset);
+  CHECK_CONTIGUOUS(gaussian_ids);
+  CHECK_CONTIGUOUS(out);
+  CHECK_CONTIGUOUS(topleft);
+  CHECK_IS_FLOATING(mean);
+  CHECK_IS_FLOATING(cov);
+  CHECK_IS_FLOATING(color);
+  CHECK_IS_FLOATING(alpha);
+  CHECK_IS_INT(offset);
+  CHECK_IS_INT(gaussian_ids);
+  CHECK_IS_FLOATING(out);
+  CHECK_IS_FLOATING(topleft);
+  uint32_t N = mean.size(0);
+  uint32_t N_with_dub = gaussian_ids.size(0);
+  //   printf("tile_based_vol_rendering\n");
+  tile_based_vol_rendering_cuda_v2(
+      N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+      color.data_ptr<float>(), alpha.data_ptr<float>(), offset.data_ptr<int>(),
+      gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+      topleft.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+      pixel_size_y, H, W, thresh);
+}
+
 void tile_based_vol_rendering_backward(
     Tensor mean, Tensor cov, Tensor color, Tensor alpha, Tensor offset,
     Tensor gaussian_ids, Tensor out, Tensor grad_mean, Tensor grad_cov,
@@ -267,4 +352,22 @@ void tile_based_vol_rendering_backward(
       grad_color.data_ptr<float>(), grad_alpha.data_ptr<float>(),
       grad_out.data_ptr<float>(), topleft.data_ptr<float>(), tile_size,
       n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+}
+
+void tile_culling_aabb(Tensor aabb_topleft, Tensor aabb_bottomright,
+                       Tensor gaussian_ids, Tensor offset, Tensor depth,
+                       uint32_t n_tiles_h, uint32_t n_tiles_w) {
+  CHECK_DC_INT(aabb_topleft);
+  CHECK_DC_INT(aabb_bottomright);
+  CHECK_DC_INT(gaussian_ids);
+  CHECK_DC_INT(offset);
+  CHECK_DC_FLOAT(depth);
+
+  uint32_t N = aabb_topleft.size(0);
+  uint32_t N_with_dub = gaussian_ids.size(0);
+  assert(offset.size(0) == n_tiles_h * n_tiles_w + 1);
+  tile_culling_aabb_cuda(
+      N, N_with_dub, n_tiles_h, n_tiles_w, gaussian_ids.data_ptr<int>(),
+      offset.data_ptr<int>(), aabb_topleft.data_ptr<int>(),
+      aabb_bottomright.data_ptr<int>(), depth.data_ptr<float>());
 }

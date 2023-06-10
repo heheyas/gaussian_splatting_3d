@@ -36,3 +36,6 @@ scale_shrink_factor: 1.6
 alpha_reset_period: 3000
 alpha_reset_val: 0.1
 alpha_thresh: 0.01
+
+# debug fn
+fn: test_basic_alias

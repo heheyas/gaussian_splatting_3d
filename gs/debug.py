@@ -63,7 +63,7 @@ class MockRenderer(torch.nn.Module):
 
         self.D = 3.0
 
-        x = torch.linspace(-5, -5, 1)
+        x = torch.linspace(-5, -10, 100)
         y = torch.linspace(-10, 10, 40)
         z = torch.linspace(-10, 10, 50)
         x, y, z = torch.meshgrid(x, y, z)
@@ -727,3 +727,173 @@ class MockRenderer(torch.nn.Module):
         toc("render v2")
 
         return out
+
+    def benchmark_culling(self):
+        up = np.array([0, 0, 1], dtype=np.float32)
+        look_at = np.array([0, 0, 0], dtype=np.float32)
+        pos = np.array([1, 0, 0], dtype=np.float32)
+
+        camera_info = CameraInfo(
+            961.22,
+            963.09,
+            648.38,
+            420.12,
+            1297,
+            840,
+            0.0,
+            1000,
+        )
+
+        camera_info.upsample(4)
+
+        c2w = get_c2w_from_up_and_look_at(up, look_at, pos)
+        c2w = torch.from_numpy(c2w).to(self.device)
+
+        f_normals, f_pts = camera_info.get_frustum(c2w)
+        mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+        with torch.no_grad():
+            _backend.culling_gaussian_bsphere(
+                self.mean,
+                self.qvec,
+                self.log_svec.exp(),
+                f_normals,
+                f_pts,
+                mask,
+                self.frustum_culling_radius,
+            )
+        mean = self.mean[mask].contiguous()
+        qvec = self.qvec[mask].contiguous()
+        svec = self.log_svec[mask].exp().contiguous()
+        color = self.color[mask].contiguous()
+        # alpha = self.alpha[mask].contiguous()
+        # alpha = torch.nn.functional.sigmoid(self.alpha[mask].contiguous())
+        alpha = torch.sigmoid(self.alpha[mask].contiguous())
+
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+
+        mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+
+        H, W = camera_info.h, camera_info.w
+        n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
+        n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        n_tiles = n_tiles_h * n_tiles_w
+        img_topleft = torch.FloatTensor(
+            [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
+        ).to(self.device)
+
+        with torch.no_grad():
+            m = (cov[..., 0, 0] + cov[..., 1, 1]) / 2.0
+            p = torch.det(cov)
+            radius = torch.sqrt(m + torch.sqrt((m.pow(2) - p).clamp(min=0.0)))
+
+        num_gaussians = torch.zeros(n_tiles, dtype=torch.int32, device=self.device)
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+
+        with torch.no_grad():
+            if self.tile_culling_type == "bcircle":
+                _backend.count_num_gaussians_each_tile_bcircle(
+                    mean,
+                    radius * self.tile_culling_radius,
+                    img_topleft,
+                    self.tile_size,
+                    n_tiles_h,
+                    n_tiles_w,
+                    pixel_size_x,
+                    pixel_size_y,
+                    num_gaussians,
+                )
+            elif self.tile_culling_type == "prob":
+                _backend.count_num_gaussians_each_tile(
+                    mean,
+                    cov,
+                    img_topleft,
+                    self.tile_size,
+                    n_tiles_h,
+                    n_tiles_w,
+                    pixel_size_x,
+                    pixel_size_y,
+                    num_gaussians,
+                    self.tile_culling_thresh,
+                )
+            else:
+                raise NotImplementedError
+        self.total_dub_gaussians = num_gaussians.sum().item()
+        self.num_gaussians_bkp = num_gaussians.clone()
+        tiledepth = torch.zeros(
+            self.total_dub_gaussians, dtype=torch.float64, device=self.device
+        )
+        offset = torch.zeros(n_tiles + 1, dtype=torch.int32, device=self.device)
+        gaussian_ids = torch.zeros(
+            self.total_dub_gaussians, dtype=torch.int32, device=self.device
+        )
+
+        tic()
+        for _ in range(100):
+            with torch.no_grad():
+                if self.tile_culling_type == "bcircle":
+                    _backend.prepare_image_sort(
+                        gaussian_ids,
+                        tiledepth,
+                        depth,
+                        num_gaussians,
+                        offset,
+                        mean,
+                        radius * self.tile_culling_radius,
+                        img_topleft,
+                        self.tile_size,
+                        n_tiles_h,
+                        n_tiles_w,
+                        pixel_size_x,
+                        pixel_size_y,
+                    )
+                elif self.tile_culling_type == "prob":
+                    _backend.image_sort(
+                        gaussian_ids,
+                        tiledepth,
+                        depth,
+                        num_gaussians,
+                        offset,
+                        mean,
+                        cov,
+                        img_topleft,
+                        self.tile_size,
+                        n_tiles_h,
+                        n_tiles_w,
+                        pixel_size_x,
+                        pixel_size_y,
+                        self.tile_culling_thresh,
+                    )
+                else:
+                    raise NotImplementedError
+        toc("bcircle culling")
+
+        N_with_dub, aabb_topleft, aabb_bottomright = tile_culling_aabb_count(
+            mean, cov, self.tile_size, camera_info, 9
+        )
+
+        H, W = camera_info.h, camera_info.w
+        n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
+        n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        n_tiles = n_tiles_h * n_tiles_w
+        img_topleft = torch.FloatTensor(
+            [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
+        ).to(self.device)
+        offset = torch.zeros([n_tiles + 1], dtype=torch.int32, device=self.device)
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+        gaussian_ids = torch.zeros([N_with_dub], dtype=torch.int32, device=self.device)
+
+        tic()
+        for _ in range(100):
+            _backend.tile_culling_aabb(
+                aabb_topleft,
+                aabb_bottomright,
+                gaussian_ids,
+                offset,
+                depth,
+                n_tiles_h,
+                n_tiles_w,
+            )
+        toc("aabb culling")

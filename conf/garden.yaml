@@ -8,18 +8,18 @@ device: cuda:0
 # data
 data_name: garden
 data_dir: ./data/garden
-image_dir: ./data/garden/images_2
-downsample: 2
+image_dir: ./data/garden/images_4
+downsample: 4
 save_iteration: 1000
 
 # renderer
 tile_size: 16
-near_plane: 3.0
+near_plane: 1.5
 far_plane: 1000.0
-tile_culling_type: bcircle
-tile_culling_thresh: 0.01
 frustum_culling_radius: 1.0
-tile_culling_radius: 4.0
+tile_culling_type: aabb
+tile_culling_thresh: 0.01
+tile_culling_radius: 6.0
 
 # model
 random_init: False
@@ -38,10 +38,11 @@ color_act: sigmoid
 svec_act: exp
 
 # gaussian adaptive control
+warm_up: 1000
 adaptive_control_iteration: 300
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
-alpha_reset_period: 300
+alpha_reset_period: 300000000
 alpha_reset_val: 0.1
 alpha_thresh: 0.05
 split_scale_thresh: 0.02
@@ -51,4 +52,5 @@ viewer: False
 viewer_port: 1234
 
 # tests
+only_forward: False
 pos_lr: 1e-3

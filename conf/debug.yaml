@@ -39,3 +39,5 @@ alpha_thresh: 0.01
 
 # debug fn
 fn: test_basic_alias
+sh_order: 1
+layout: one

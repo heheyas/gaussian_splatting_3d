@@ -16,7 +16,7 @@ try:
 except ImportError:
     from .backend import _backend
 
-from .renderer import render, project_gaussians
+from .renderer import render, project_gaussians, render_start_end, render_sh
 
 
 def get_c2w_from_up_and_look_at(up, look_at, pos):
@@ -49,40 +49,61 @@ class MockRenderer(torch.nn.Module):
         self.log_svec = torch.nn.Parameter(
             torch.FloatTensor([[1.0, 1.0, 0.5], [1.1, 0.5, 1.1]])
         )
-        self.log_svec.data *= np.log(80e-3)
+        self.log_svec.data *= np.log(20e-3)
         self.color = torch.nn.Parameter(
-            torch.FloatTensor([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+            torch.FloatTensor([[0.01, 0.01, 0.99], [0.01, 0.99, 0.01]])
         )
         self.alpha = torch.nn.Parameter(torch.FloatTensor([10000, 10000]))
 
-        # self.mean = torch.nn.Parameter(self.mean[:1])
-        # self.qvec = torch.nn.Parameter(self.qvec[:1])
-        # self.color = torch.nn.Parameter(self.color[:1])
-        # self.alpha = torch.nn.Parameter(self.alpha[:1])
-        # self.log_svec = torch.nn.Parameter(self.log_svec[:1])
-
         self.D = 3.0
 
-        x = torch.linspace(-5, -10, 100)
-        y = torch.linspace(-10, 10, 40)
-        z = torch.linspace(-10, 10, 50)
-        x, y, z = torch.meshgrid(x, y, z)
-        x = x.reshape(-1)
-        y = y.reshape(-1)
-        z = z.reshape(-1)
-        mean = torch.stack([x, y, z], dim=1)
-        self.mean = torch.nn.Parameter(mean)
-        self.N = self.mean.shape[0]
-        self.qvec = torch.nn.Parameter(
-            torch.FloatTensor([[1.0, 0.0, 0.0, 0.0]] * self.N)
-        )
-        self.log_svec = torch.nn.Parameter(
-            torch.FloatTensor([[1.0, 1.0, 1.0]] * self.N)
-        )
-        self.log_svec.data *= np.log(120e-3)
-        color = torch.randn(self.N, 3).clamp(min=0.0, max=1.0)
-        self.color = torch.nn.Parameter(color)
-        self.alpha = torch.nn.Parameter(torch.FloatTensor([0.0] * self.N))
+        layout = cfg.get("layout", "default")
+
+        if layout == "one":
+            self.mean = torch.nn.Parameter(self.mean[:1])
+            self.qvec = torch.nn.Parameter(self.qvec[:1])
+            self.color = torch.nn.Parameter(self.color[:1])
+            self.alpha = torch.nn.Parameter(self.alpha[:1])
+            self.log_svec = torch.nn.Parameter(self.log_svec[:1])
+
+        if layout == "one_repeat":
+            self.mean = torch.nn.Parameter(self.mean[:1].repeat(100, 1))
+            self.qvec = torch.nn.Parameter(self.qvec[:1].repeat(100, 1))
+            self.color = torch.nn.Parameter(self.color[:1].repeat(100, 1))
+            self.alpha = torch.nn.Parameter(self.alpha[:1].repeat(100, 1))
+            self.log_svec = torch.nn.Parameter(self.log_svec[:1].repeat(100, 1))
+
+        if layout == "one_repeat":
+            self.mean = torch.nn.Parameter(self.mean.repeat(100, 1))
+            self.qvec = torch.nn.Parameter(self.qvec.repeat(100, 1))
+            self.color = torch.nn.Parameter(self.color.repeat(100, 1))
+            self.alpha = torch.nn.Parameter(self.alpha.repeat(100, 1))
+            self.log_svec = torch.nn.Parameter(self.log_svec.repeat(100, 1))
+
+        if layout == "grid":
+            x = torch.linspace(-5, -10, 100)
+            y = torch.linspace(-10, 10, 40)
+            z = torch.linspace(-10, 10, 50)
+            x, y, z = torch.meshgrid(x, y, z)
+            x = x.reshape(-1)
+            y = y.reshape(-1)
+            z = z.reshape(-1)
+            mean = torch.stack([x, y, z], dim=1)
+            self.mean = torch.nn.Parameter(mean)
+            self.N = self.mean.shape[0]
+            self.qvec = torch.nn.Parameter(
+                torch.FloatTensor([[1.0, 0.0, 0.0, 0.0]] * self.N)
+            )
+            self.log_svec = torch.nn.Parameter(
+                torch.FloatTensor([[1.0, 1.0, 1.0]] * self.N)
+            )
+            self.log_svec.data *= np.log(120e-3)
+            color = torch.randn(self.N, 3).clamp(min=0.0, max=1.0)
+            # color = torch.linspace(0, 1, 3 * self.N, dtype=torch.float32).reshape(
+            #     self.N, 3
+            # )
+            self.color = torch.nn.Parameter(color)
+            self.alpha = torch.nn.Parameter(torch.FloatTensor([0.0] * self.N))
 
         self.cfg = cfg
         self.device = cfg.device
@@ -830,7 +851,7 @@ class MockRenderer(torch.nn.Module):
         )
 
         tic()
-        for _ in range(100):
+        for _ in range(10):
             with torch.no_grad():
                 if self.tile_culling_type == "bcircle":
                     _backend.prepare_image_sort(
@@ -886,7 +907,7 @@ class MockRenderer(torch.nn.Module):
         gaussian_ids = torch.zeros([N_with_dub], dtype=torch.int32, device=self.device)
 
         tic()
-        for _ in range(100):
+        for _ in range(10):
             _backend.tile_culling_aabb(
                 aabb_topleft,
                 aabb_bottomright,
@@ -897,3 +918,287 @@ class MockRenderer(torch.nn.Module):
                 n_tiles_w,
             )
         toc("aabb culling")
+
+    def complete_render_aabb_culling(self):
+        up = np.array([0, 0, 1], dtype=np.float32)
+        look_at = np.array([0, 0, 0], dtype=np.float32)
+        pos = np.array([1, 0, 0], dtype=np.float32)
+
+        camera_info = CameraInfo(
+            961.22,
+            963.09,
+            648.38,
+            420.12,
+            1297,
+            840,
+            0.0,
+            1000,
+        )
+
+        # camera_info.upsample(4)
+
+        c2w = get_c2w_from_up_and_look_at(up, look_at, pos)
+        c2w = torch.from_numpy(c2w).to(self.device)
+        f_normals, f_pts = camera_info.get_frustum(c2w)
+        mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+        with torch.no_grad():
+            _backend.culling_gaussian_bsphere(
+                self.mean,
+                self.qvec,
+                self.log_svec.exp(),
+                f_normals,
+                f_pts,
+                mask,
+                self.frustum_culling_radius,
+            )
+        mean = self.mean[mask].contiguous()
+        qvec = self.qvec[mask].contiguous()
+        svec = self.log_svec[mask].exp().contiguous()
+        color = self.color[mask].contiguous()
+        alpha = torch.sigmoid(self.alpha[mask].contiguous())
+
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+
+        mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+
+        tic()
+        N_with_dub, aabb_topleft, aabb_bottomright = tile_culling_aabb_count(
+            mean, cov, self.tile_size, camera_info, 10
+        )
+        print("N_with_dub", N_with_dub)
+        toc("count N with dub")
+        print(aabb_bottomright.dtype)
+        print(aabb_topleft.dtype)
+
+        H, W = camera_info.h, camera_info.w
+        n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
+        n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        n_tiles = n_tiles_h * n_tiles_w
+        print("n_tiles", n_tiles)
+        img_topleft = torch.FloatTensor(
+            [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
+        ).to(self.device)
+        # offset = torch.zeros([n_tiles + 1], dtype=torch.int32, device=self.device)
+        start = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        end = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+        gaussian_ids = torch.zeros([N_with_dub], dtype=torch.int32, device=self.device)
+
+        tic()
+        _backend.tile_culling_aabb_start_end(
+            aabb_topleft,
+            aabb_bottomright,
+            gaussian_ids,
+            start,
+            end,
+            depth,
+            n_tiles_h,
+            n_tiles_w,
+        )
+        toc("tile culling aabb")
+
+        start_bkp = start.clone()
+        end_bkp = end.clone()
+
+        tic()
+        _backend.tile_culling_aabb_start_end(
+            aabb_topleft,
+            aabb_bottomright,
+            gaussian_ids,
+            start,
+            end,
+            depth,
+            n_tiles_h,
+            n_tiles_w,
+        )
+        toc("tile culling aabb")
+
+        print((start_bkp == start).all())
+        print((end_bkp == end).all())
+        # breakpoint()
+
+        print_info(cov, "cov")
+        out = render_start_end(
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            img_topleft,
+            self.tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            self.T_thresh,
+        ).view(H, W, 3)
+
+        print(out.shape)
+        print_info(out, "out")
+        img = (out.cpu().detach().numpy() * 255.0).astype(np.uint8)
+        cv2.imwrite(
+            "./tmp/complete_render_aabb_culling.png",
+            cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+        )
+
+    def sh_render_sanity_check(self):
+        up = np.array([0, 0, 1], dtype=np.float32)
+        look_at = np.array([0, 0, 0], dtype=np.float32)
+        pos = np.array([1, 0, 0], dtype=np.float32)
+
+        camera_info = CameraInfo(
+            961.22,
+            963.09,
+            648.38,
+            420.12,
+            1297,
+            840,
+            0.0,
+            1000,
+        )
+
+        sh_order = self.cfg.get("sh_order", 1)
+
+        sh_base = 0.28209479177387814
+        self.color = torch.nn.Parameter(
+            torch.logit(self.color.data.unsqueeze(-1).repeat(1, 1, sh_order * sh_order))
+            / sh_base
+        )
+        # self.color = torch.nn.Parameter(torch.ones_like(self.color) / sh_base)
+        print(self.color.shape)
+        self.to(self.device)
+
+        # camera_info.upsample(4)
+
+        c2w = get_c2w_from_up_and_look_at(up, look_at, pos)
+        c2w = torch.from_numpy(c2w).to(self.device)
+
+        f_normals, f_pts = camera_info.get_frustum(c2w)
+        mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+        with torch.no_grad():
+            _backend.culling_gaussian_bsphere(
+                self.mean,
+                self.qvec,
+                self.log_svec.exp(),
+                f_normals,
+                f_pts,
+                mask,
+                self.frustum_culling_radius,
+            )
+        mean = self.mean[mask].contiguous()
+        qvec = self.qvec[mask].contiguous()
+        svec = self.log_svec[mask].exp().contiguous()
+        color = self.color[mask].contiguous()
+        alpha = torch.sigmoid(self.alpha[mask].contiguous())
+
+        # n_alive = color.shape[0]
+
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+
+        mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+
+        tic()
+        N_with_dub, aabb_topleft, aabb_bottomright = tile_culling_aabb_count(
+            mean, cov, self.tile_size, camera_info, 10
+        )
+        print("N_with_dub", N_with_dub)
+        toc("count N with dub")
+
+        H, W = camera_info.h, camera_info.w
+        n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
+        n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        n_tiles = n_tiles_h * n_tiles_w
+        print("n_tiles", n_tiles)
+        img_topleft = torch.FloatTensor(
+            [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
+        ).to(self.device)
+        # offset = torch.zeros([n_tiles + 1], dtype=torch.int32, device=self.device)
+        start = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        end = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+        gaussian_ids = torch.zeros([N_with_dub], dtype=torch.int32, device=self.device)
+
+        tic()
+        _backend.tile_culling_aabb_start_end(
+            aabb_topleft,
+            aabb_bottomright,
+            gaussian_ids,
+            start,
+            end,
+            depth,
+            n_tiles_h,
+            n_tiles_w,
+        )
+        toc("tile culling aabb")
+
+        print_info(cov, "cov")
+        out = render_sh(
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            img_topleft,
+            c2w,
+            self.tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            sh_order,
+            self.T_thresh,
+        ).view(H, W, 3)
+
+        print_info(out, "out")
+        img = (out.cpu().detach().numpy() * 255.0).astype(np.uint8)
+
+        color = (255, 255, 255)
+        mean_2d = mean.detach().cpu().numpy()
+        cov_2d = cov.detach().cpu().numpy()
+        center = camera_info.camera_space_to_pixel_space(mean_2d)
+        aabb_x = np.sqrt(cov_2d[..., 0, 0] * 10) * camera_info.fx
+        aabb_y = np.sqrt(cov_2d[..., 1, 1] * 10) * camera_info.fy
+
+        for i in range(self.N):
+            top_left = (int(center[i, 0] - aabb_x[i]), int(center[i, 1] - aabb_y[i]))
+            bottom_right = (
+                int(center[i, 0] + aabb_x[i]),
+                int(center[i, 1] + aabb_y[i]),
+            )
+            img = cv2.rectangle(img, top_left, bottom_right, color, 3)
+
+        cv2.imwrite(
+            "./tmp/sh_render_sanity_check.png",
+            cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+        )
+
+        num_gaussian_per_tile = (end - start).cpu().numpy()
+        heatmap = draw_heatmap_of_num_gaussians_per_tile(
+            "sh_render_heatmap.png",
+            self.tile_size,
+            num_gaussian_per_tile,
+            n_tiles_h,
+            n_tiles_w,
+            H,
+            W,
+            False,
+        )
+
+        ## backward sanity test
+
+        target = torch.zeros_like(out)
+
+        loss = torch.nn.functional.mse_loss(out, target)
+        loss.backward()

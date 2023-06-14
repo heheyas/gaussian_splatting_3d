@@ -3,8 +3,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import logging
 
 _timing_ = False
+
+logger = logging.getLogger(__name__)
 
 
 def tic():
@@ -31,6 +34,11 @@ def toc(name=""):
             + " seconds."
         )
         print("$" * 30)
+        # logger.info(
+        #     f"{name} Elapsed time is "
+        #     + str(time.time() - startTime_for_tictoc)
+        #     + " seconds."
+        # )
     else:
         print("Toc: start time not set")
 
@@ -73,7 +81,7 @@ def save_fig(img, filename):
     ax.imshow(img)
     fig.savefig(f"tmp/{filename}.png", bbox_inches="tight")
 
-    
+
 def save_img(img, path, filename):
     path = Path(path)
     if not path.exists():
@@ -111,3 +119,11 @@ def print_info(var, name):
 
 def mp_read(filenames):
     pass
+
+
+def lineprofiler(func):
+    try:
+        func = profile(func)
+    except NameError:
+        pass
+    return func

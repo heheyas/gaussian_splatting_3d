@@ -7,7 +7,7 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 _src_path = os.path.dirname(os.path.abspath(__file__))
 
 nvcc_flags = [
-    "-O0",
+    "-O3",
     "-std=c++14",
     "-G",
     "-g",
@@ -40,7 +40,7 @@ else:
     pass
 
 if os.name == "posix":
-    c_flags = ["-O0", "-std=c++14", "-g"]
+    c_flags = ["-O3", "-std=c++14", "-g"]
 elif os.name == "nt":
     c_flags = ["/O2", "/std:c++17"]
 

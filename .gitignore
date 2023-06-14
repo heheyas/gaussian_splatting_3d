@@ -167,3 +167,7 @@ outputs/
 log/
 logs/
 .vscode
+*.lprof
+*.sqlite
+*.qdrep
+profile_outputs/

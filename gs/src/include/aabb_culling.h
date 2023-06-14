@@ -49,6 +49,7 @@ __global__ void fill_offset_aabb(uint32_t N_with_dub, int *sorted_tile_ids,
   int tile_id = sorted_tile_ids[global_id * 2 + 1];
   if (global_id == 0) {
     offset[tile_id] = 0;
+    return;
   }
   int prev_tile_id = sorted_tile_ids[(global_id - 1) * 2 + 1];
   if (prev_tile_id > tile_id) {
@@ -72,11 +73,12 @@ __global__ void fill_start_aabb(uint32_t N_with_dub, int *sorted_tile_ids,
   if (global_id >= N_with_dub) {
     return;
   }
-  int tile_id = sorted_tile_ids[global_id * 2];
+  int tile_id = sorted_tile_ids[global_id * 2 + 1];
   if (global_id == 0) {
     start[tile_id] = 0;
+    return;
   }
-  int prev_tile_id = sorted_tile_ids[(global_id - 1) * 2];
+  int prev_tile_id = sorted_tile_ids[(global_id - 1) * 2 + 1];
   assert(prev_tile_id <= tile_id);
   if (prev_tile_id != tile_id) {
     start[tile_id] = global_id;
@@ -89,11 +91,12 @@ __global__ void fill_end_aabb(uint32_t N_with_dub, int *sorted_tile_ids,
   if (global_id >= N_with_dub) {
     return;
   }
-  int tile_id = sorted_tile_ids[global_id * 2];
+  int tile_id = sorted_tile_ids[global_id * 2 + 1];
   if (global_id == N_with_dub - 1) {
     end[tile_id] = N_with_dub;
+    return;
   }
-  int next_tile_id = sorted_tile_ids[(global_id + 1) * 2];
+  int next_tile_id = sorted_tile_ids[(global_id + 1) * 2 + 1];
   if (next_tile_id != tile_id) {
     end[tile_id] = global_id + 1;
   }
@@ -145,7 +148,7 @@ void tile_culling_aabb_cuda(uint32_t N, uint32_t N_with_dub, uint32_t n_tiles_h,
       N, N_with_dub, n_tiles_h, n_tiles_w, tile_ids, tile_depth,
       unsorted_gaussian_ids, aabb_topleft, aabb_bottomright, depth, size);
   timer.Stop();
-  printf("fill_tiledepth_aabb: %f ms\n", timer.Elapsed());
+  timer.Elapsed("fill_tiledepth_aabb");
 
   int size_h;
   cudaCheck(cudaMemcpy(&size_h, size, sizeof(int), cudaMemcpyDeviceToHost));
@@ -164,7 +167,7 @@ void tile_culling_aabb_cuda(uint32_t N, uint32_t N_with_dub, uint32_t n_tiles_h,
       d_temp_storage, temp_storage_bytes, tiledepth, sorted_tiledepth,
       unsorted_gaussian_ids, gaussian_ids, N_with_dub));
   timer.Stop();
-  printf("radix sort: %f ms\n", timer.Elapsed());
+  timer.Elapsed("radix sort");
 
   n_blocks = div_round_up(N_with_dub, (uint32_t)N_THREADS);
   timer.Start();
@@ -172,7 +175,7 @@ void tile_culling_aabb_cuda(uint32_t N, uint32_t N_with_dub, uint32_t n_tiles_h,
   fill_offset_aabb<<<n_blocks, N_THREADS>>>(N_with_dub, sorted_tile_ids,
                                             offset);
   timer.Stop();
-  printf("fill_offset_aabb: %f ms\n", timer.Elapsed());
+  timer.Elapsed("fill offset");
 
   // n_blocks = div_round_up(n_tiles, N_THREADS);
   // timer.Start();
@@ -218,7 +221,7 @@ void tile_culling_aabb_start_end_cuda(uint32_t N, uint32_t N_with_dub,
       N, N_with_dub, n_tiles_h, n_tiles_w, tile_ids, tile_depth,
       unsorted_gaussian_ids, aabb_topleft, aabb_bottomright, depth, size);
   timer.Stop();
-  printf("fill_tiledepth_aabb: %f ms\n", timer.Elapsed());
+  timer.Elapsed("fill tiledepth");
 
   int size_h;
   cudaCheck(cudaMemcpy(&size_h, size, sizeof(int), cudaMemcpyDeviceToHost));
@@ -226,6 +229,7 @@ void tile_culling_aabb_start_end_cuda(uint32_t N, uint32_t N_with_dub,
   cudaCheck(cudaFree(size));
 
   // device radix sort
+  timer.Start();
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
   cudaCheck(cub::DeviceRadixSort::SortPairs(
@@ -235,10 +239,19 @@ void tile_culling_aabb_start_end_cuda(uint32_t N, uint32_t N_with_dub,
   cudaCheck(cub::DeviceRadixSort::SortPairs(
       d_temp_storage, temp_storage_bytes, tiledepth, sorted_tiledepth,
       unsorted_gaussian_ids, gaussian_ids, N_with_dub));
+  timer.Stop();
+  timer.Elapsed("radix sort");
 
   n_blocks = div_round_up(N_with_dub, (uint32_t)N_THREADS);
+
   timer.Start();
+  cudaCheck(cudaMemset(start, -1, sizeof(int) * n_tiles));
+  cudaCheck(cudaMemset(end, -1, sizeof(int) * n_tiles));
   int *sorted_tile_ids = reinterpret_cast<int *>(sorted_tiledepth);
+  fill_start_aabb<<<n_blocks, N_THREADS>>>(N_with_dub, sorted_tile_ids, start);
+  fill_end_aabb<<<n_blocks, N_THREADS>>>(N_with_dub, sorted_tile_ids, end);
+  timer.Stop();
+  timer.Elapsed("fill start end");
 
   cudaCheck(cudaFree(d_temp_storage));
   cudaCheck(cudaFree(tiledepth));

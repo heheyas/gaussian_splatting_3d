@@ -26,4 +26,29 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Tile based volume rendering v2 which uses out[3] and cum_alpha in "
         "local var instead of scratchpad memory and further carry gaussian_ids "
         "into scatchpad memory");
+  m.def("tile_culling_aabb_start_end", &tile_culling_aabb_start_end,
+        "Tile culling with aabb and fill blanks in start and end");
+  m.def("tile_based_vol_rendering_start_end",
+        &tile_based_vol_rendering_start_end,
+        "Tile based volume rendering with start and end array, designed for "
+        "aabb culling");
+  m.def("tile_based_vol_rendering_backward_start_end",
+        &tile_based_vol_rendering_backward_start_end,
+        "Tile based volume "
+        "rendering backward "
+        "with start and end "
+        "array, designed for "
+        "aabb culling");
+  m.def("tile_based_vol_rendering_sh", &tile_based_vol_rendering_sh,
+        "Tile based volume rendering with spherical harmonics");
+  m.def("tile_based_vol_rendering_backward_sh",
+        &tile_based_vol_rendering_backward_sh,
+        "Tile based volume rendering "
+        "backward with spherical "
+        "harmonics");
+  m.def("tile_based_vol_rendering_backward_sh_v1",
+        &tile_based_vol_rendering_backward_sh_v1,
+        "Tile based volume rendering "
+        "backward with spherical "
+        "harmonics, the gaussian_ids are store in scratchpad memory");
 }

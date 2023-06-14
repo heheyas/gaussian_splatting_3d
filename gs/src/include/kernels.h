@@ -355,3 +355,31 @@ kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
   atomicAdd(grad_cov + 2, 0.5 * (float)(d_grad * tmpy * tmpx));
   atomicAdd(grad_cov + 3, 0.5 * (float)(d_grad * tmpy * tmpy));
 }
+
+__device__ inline void
+kernel_gaussian_2d_backward_nonatomic(float *mean, float *cov, float *query,
+                                      float *grad_mean, float *grad_cov,
+                                      float grad) {
+  // non-atomic version
+  // nan
+  double d_grad = (double)grad;
+  double c0 = (double)cov[0];
+  double c1 = (double)cov[1];
+  double c2 = (double)cov[2];
+  double c3 = (double)cov[3];
+  double det = c0 * c3 - c1 * c2;
+  double x = query[0] - mean[0];
+  double y = query[1] - mean[1];
+  double tmpx = (x * c3 - y * c2) / det;
+  double tmpy = (-x * c1 + y * c0) / det;
+  // note: val has been multiplied in the grad
+  // atomic ops here
+  checkValue((float)(d_grad * tmpx));
+  checkValue((float)(d_grad * tmpy * tmpy));
+  grad_mean[0] += (float)(d_grad * tmpx);
+  grad_mean[1] += (float)(d_grad * tmpy);
+  grad_cov[0] += 0.5 * (float)(d_grad * tmpx * tmpx);
+  grad_cov[1] += 0.5 * (float)(d_grad * tmpx * tmpy);
+  grad_cov[2] += 0.5 * (float)(d_grad * tmpy * tmpx);
+  grad_cov[3] += 0.5 * (float)(d_grad * tmpy * tmpy);
+}

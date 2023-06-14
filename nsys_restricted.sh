@@ -1,0 +1,1 @@
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s cpu -o nsight_report -f true --capture-range=cudaProfilerApi --stop-on-range-end=true --cudabacktrace=true --osrt-threshold=10000 -x true python main.py max_iteration=5

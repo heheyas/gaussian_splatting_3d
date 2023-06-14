@@ -10,6 +10,7 @@
 // #endif
 
 #include <assert.h>
+#include <cstdlib>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <device_atomic_functions.h>
@@ -108,11 +109,14 @@ struct GpuTimer {
 
   void Stop() { cudaEventRecord(stop, 0); }
 
-  float Elapsed() {
-    float elapsed;
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&elapsed, start, stop);
-    return elapsed;
+  void Elapsed(const char *msg) {
+    const char *timing = std::getenv("TIMING");
+    if (timing != NULL) {
+      float elapsed;
+      cudaEventSynchronize(stop);
+      cudaEventElapsedTime(&elapsed, start, stop);
+      printf("%s: %.3f ms\n", msg, elapsed);
+    }
   }
 };
 

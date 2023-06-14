@@ -6,14 +6,13 @@ import time
 import numpy as np
 import hydra
 from gs.renderer import GaussianRenderer
+from gs.sh_renderer import SHRenderer
 from utils.camera import get_c2ws_and_camera_info, get_c2ws_and_camera_info_v1
-from kornia.losses import ssim_loss
 from functools import partial
-from utils.misc import print_info, save_img, tic, toc
+from utils.misc import print_info, save_img, tic, toc, lineprofiler
 from utils import misc
 from utils.loss import get_loss_fn
 import visdom
-from collections import deque
 
 from rich.console import Console
 from tqdm import tqdm
@@ -22,14 +21,10 @@ from torch.utils.tensorboard import SummaryWriter
 import datetime
 import logging
 
-# import line_profiler
-
-# profile = line_profiler.LineProfiler()
-
 console = Console()
 
 
-@hydra.main(config_path="conf", config_name="garden")
+@hydra.main(config_path="conf", config_name="garden_sh")
 def main(cfg):
     logger = logging.getLogger(__name__)
     if cfg.viewer:
@@ -51,7 +46,8 @@ def main(cfg):
         toc("test")
 
     c2ws, camera_info, images, pts, rgb = get_c2ws_and_camera_info_v1(cfg)
-    renderer = GaussianRenderer(cfg, pts, rgb).to(cfg.device)
+    c2ws = c2ws.to(cfg.device).contiguous()
+    renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
 
     if cfg.debug:
         avg_radius = np.linalg.norm(c2ws.cpu().numpy()[:, :3, 3], axis=-1).mean()
@@ -85,6 +81,8 @@ def main(cfg):
             if e == 0:
                 print_info(out, "out")
                 print("num total gaussian", renderer.total_dub_gaussians)
+                if cfg.debug:
+                    exit(0)
             if only_forward:
                 pbar.update(1)
                 continue
@@ -99,12 +97,12 @@ def main(cfg):
             if e % log_iteration == 0:
                 save_img(
                     out.cpu().clamp(min=0.0, max=1.0),
-                    f"./tmp/{cfg.data_name}",
+                    f"./tmp/{cfg.data_name}_sh",
                     f"train_{e}.png",
                 )
                 save_img(
                     gt.cpu().clamp(min=0.0, max=1.0),
-                    f"./tmp/{cfg.data_name}",
+                    f"./tmp/{cfg.data_name}_sh",
                     f"gt_{e}.png",
                 )
                 if cfg.debug:

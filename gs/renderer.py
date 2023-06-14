@@ -10,6 +10,10 @@ import matplotlib.pyplot as plt
 from scipy.special import logit, expit
 from rich.console import Console
 from utils.activations import activations, inv_activations
+from gs.culling import tile_culling_aabb_count
+from utils.misc import lineprofiler
+from timeit import timeit
+from time import time
 
 console = Console()
 
@@ -373,20 +377,24 @@ def jacobian(u):
     return J
 
 
+@lineprofiler
 def project_pts(pts: torch.Tensor, c2w: TensorType["N", 3, 4]):
     d = -c2w[..., :3, 3]
-    W = torch.transpose(c2w[..., :3, :3], -1, -2)
+    W = torch.transpose(c2w[..., :3, :3], -1, -2).contiguous()
 
-    return torch.einsum("ij,bj->bi", W, pts + d)
+    ret = torch.einsum("ij,bj->bi", W, pts + d)
+
+    return ret
 
 
+@lineprofiler
 def project_gaussians(
     mean: TensorType["N", 3],
     qvec: TensorType["N", 4],
     svec: TensorType["N", 3],
     c2w: TensorType[3, 4],
 ):
-    projected_mean = project_pts(mean, c2w)
+    projected_mean = project_pts(mean.detach(), c2w)
     rotmat = qsvec2rotmat_batched(qvec, svec)
     sigma = rotmat @ torch.transpose(rotmat, -1, -2)
     W = torch.transpose(c2w[:3, :3], -1, -2)
@@ -519,7 +527,297 @@ class _render(torch.autograd.Function):
         )
 
 
+class _render_start_end(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        mean,
+        cov,
+        color,
+        alpha,
+        start,
+        end,
+        gaussian_ids,
+        topleft,
+        tile_size,
+        n_tiles_h,
+        n_tiles_w,
+        pixel_size_x,
+        pixel_size_y,
+        H,
+        W,
+        thresh,
+    ):
+        out = torch.zeros([H * W * 3], dtype=torch.float32, device=mean.device)
+        _backend.tile_based_vol_rendering_start_end(
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            thresh,
+        )
+        ctx.save_for_backward(
+            mean, cov, color, alpha, start, end, gaussian_ids, out, topleft
+        )
+        ctx.const = [
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            thresh,
+        ]
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad):
+        (
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+        ) = ctx.saved_tensors
+        grad_mean = torch.zeros_like(mean)
+        grad_cov = torch.zeros_like(cov)
+        grad_color = torch.zeros_like(color)
+        grad_alpha = torch.zeros_like(alpha)
+        (
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            thresh,
+        ) = ctx.const
+
+        tic()
+        _backend.tile_based_vol_rendering_backward_start_end(
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            grad_mean,
+            grad_cov,
+            grad_color,
+            grad_alpha,
+            grad,
+            topleft,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            thresh,
+        )
+        toc("render backward")
+
+        return (
+            grad_mean,
+            grad_cov,
+            grad_color,
+            grad_alpha,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _render_sh(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        mean,
+        cov,
+        sh_coeffs,
+        alpha,
+        start,
+        end,
+        gaussian_ids,
+        topleft,
+        c2w,
+        tile_size,
+        n_tiles_h,
+        n_tiles_w,
+        pixel_size_x,
+        pixel_size_y,
+        H,
+        W,
+        C,
+        thresh,
+    ):
+        out = torch.zeros([H * W * 3], dtype=torch.float32, device=mean.device)
+        _backend.tile_based_vol_rendering_sh(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        )
+        ctx.save_for_backward(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+        )
+        ctx.const = [
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        ]
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad):
+        (
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+        ) = ctx.saved_tensors
+
+        grad_mean = torch.zeros_like(mean)
+        grad_cov = torch.zeros_like(cov)
+        grad_sh_coeffs = torch.zeros_like(sh_coeffs)
+        grad_alpha = torch.zeros_like(alpha)
+        (
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        ) = ctx.const
+
+        tic()
+        _backend.tile_based_vol_rendering_backward_sh(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            grad_mean,
+            grad_cov,
+            grad_sh_coeffs,
+            grad_alpha,
+            grad,
+            topleft,
+            c2w,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        )
+        toc("render backward")
+
+        # print_info(grad_mean, "grad_mean")
+
+        return (
+            grad_mean,
+            grad_cov,
+            grad_sh_coeffs,
+            grad_alpha,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
 render = _render.apply
+render_start_end = _render_start_end.apply
+render_sh = _render_sh.apply
 
 
 class GaussianRenderer(torch.nn.Module):
@@ -532,15 +830,9 @@ class GaussianRenderer(torch.nn.Module):
         self.qvec = torch.nn.Parameter(torch.zeros([self.N, 4]))
         self.qvec.data[..., 0] = 1.0
 
-        self.svec_before_activation = torch.nn.Parameter(
-            torch.ones([self.N, 3])
-        )
-        self.color_before_activation = torch.nn.Parameter(
-            rgb
-        )
-        self.alpha_before_activation = torch.nn.Parameter(
-            torch.ones([self.N])
-        )
+        self.svec_before_activation = torch.nn.Parameter(torch.ones([self.N, 3]))
+        self.color_before_activation = torch.nn.Parameter(rgb)
+        self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
 
         self.svec_act = activations[cfg.svec_act]
         self.color_act = activations[cfg.color_act]
@@ -549,11 +841,10 @@ class GaussianRenderer(torch.nn.Module):
         self.svec_inv_act = inv_activations[cfg.svec_act]
         self.color_inv_act = inv_activations[cfg.color_act]
         self.alpha_inv_act = inv_activations[cfg.alpha_act]
-        
+
         self.svec_before_activation.data.fill_(self.svec_inv_act(cfg.svec_init))
         self.color_before_activation.data = self.color_inv_act(rgb)
         self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
-
 
         self.set_cfg(cfg)
 
@@ -607,7 +898,7 @@ class GaussianRenderer(torch.nn.Module):
         self.alpha_reset_val = cfg.alpha_reset_val
         self.alpha_thresh = cfg.alpha_thresh
 
-    def forward(self, c2w, camera_info):
+    def render_lecacy(self, c2w, camera_info):
         f_normals, f_pts = camera_info.get_frustum(c2w)
         mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
         with torch.no_grad():
@@ -653,7 +944,7 @@ class GaussianRenderer(torch.nn.Module):
 
         if self.cfg.debug:
             print("n_tiles", n_tiles)
-        
+
         img_topleft = torch.FloatTensor(
             [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
         ).to(self.device)
@@ -768,6 +1059,101 @@ class GaussianRenderer(torch.nn.Module):
 
         return out
 
+    @lineprofiler
+    def render_aabb_culling(self, c2w, camera_info):
+        f_normals, f_pts = camera_info.get_frustum(c2w)
+        mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+        with torch.no_grad():
+            _backend.culling_gaussian_bsphere(
+                self.mean,
+                self.qvec,
+                self.svec,
+                f_normals,
+                f_pts,
+                mask,
+                self.frustum_culling_radius,
+            )
+        mean = self.mean[mask].contiguous()
+        qvec = self.qvec[mask].contiguous()
+        svec = self.svec[mask].contiguous()
+        color = self.color[mask].contiguous()
+        alpha = self.alpha[mask].contiguous()
+
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+
+        mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+
+        self.depth = depth
+        self.radius = None
+
+        tic()
+        N_with_dub, aabb_topleft, aabb_bottomright = tile_culling_aabb_count(
+            mean,
+            cov,
+            self.tile_size,
+            camera_info,
+            self.tile_culling_radius,
+        )
+        toc("count N with dub")
+
+        self.total_dub_gaussians = N_with_dub
+
+        H, W = camera_info.h, camera_info.w
+        n_tiles_h = H // self.tile_size + (H % self.tile_size > 0)
+        n_tiles_w = W // self.tile_size + (W % self.tile_size > 0)
+        n_tiles = n_tiles_h * n_tiles_w
+        img_topleft = torch.FloatTensor(
+            [-camera_info.cx / camera_info.fx, -camera_info.cy / camera_info.fy],
+        ).to(self.device)
+        start = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        end = -torch.ones([n_tiles], dtype=torch.int32, device=self.device)
+        pixel_size_x = 1.0 / camera_info.fx
+        pixel_size_y = 1.0 / camera_info.fy
+        gaussian_ids = torch.zeros([N_with_dub], dtype=torch.int32, device=self.device)
+
+        tic()
+        _backend.tile_culling_aabb_start_end(
+            aabb_topleft,
+            aabb_bottomright,
+            gaussian_ids,
+            start,
+            end,
+            depth,
+            n_tiles_h,
+            n_tiles_w,
+        )
+        toc("tile culling aabb")
+
+        tic()
+        out = render_start_end(
+            mean,
+            cov,
+            color,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            img_topleft,
+            self.tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            self.T_thresh,
+        ).view(H, W, 3)
+        toc("render")
+
+        return out
+
+    def forward(self, c2w, camera_info):
+        if self.cfg.tile_culling_type == "aabb":
+            return self.render_aabb_culling(c2w, camera_info)
+        else:
+            return self.render_lecacy(c2w, camera_info)
+
     @property
     def svec(self):
         return self.svec_act(self.svec_before_activation)
@@ -783,7 +1169,7 @@ class GaussianRenderer(torch.nn.Module):
     def split_gaussians(self):
         assert self.mean.grad is not None, "mean.grad is None"
         console.print("[red bold]Splitting Gaussians")
-        mean_mask = (self.mean.grad.norm(dim=-1) > self.pos_grad_thresh)
+        mean_mask = self.mean.grad.norm(dim=-1) > self.pos_grad_thresh
         svec_mask = (self.svec.data > self.split_scale_thresh).any(dim=-1)
         split_mask = torch.logical_and(mean_mask, svec_mask)
         clone_mask = torch.logical_and(mean_mask, torch.logical_not(split_mask))
@@ -792,7 +1178,7 @@ class GaussianRenderer(torch.nn.Module):
         num_clone = clone_mask.sum().item()
 
         console.print(f"[red bold]num_split {num_split} num_clone {num_clone}")
-        
+
         num_new_gaussians = num_split + num_clone
 
         split_mean = self.mean.data[split_mask].repeat(2, 1)
@@ -802,10 +1188,12 @@ class GaussianRenderer(torch.nn.Module):
         split_color_ba = self.color_before_activation.data[split_mask].repeat(2, 1)
         split_alpha_ba = self.alpha_before_activation.data[split_mask].repeat(2)
         split_rotmat = qvec2rotmat_batched(split_qvec).transpose(-1, -2)
-        
+
         split_gn = torch.randn(num_split * 2, 3, device=self.mean.device) * split_svec
 
-        split_sampled_mean = split_mean + torch.einsum("bij, bj -> bi", split_rotmat, split_gn)
+        split_sampled_mean = split_mean + torch.einsum(
+            "bij, bj -> bi", split_rotmat, split_gn
+        )
 
         # check left product or right product
 
@@ -828,44 +1216,65 @@ class GaussianRenderer(torch.nn.Module):
         new_alpha[:unchanged_gaussians] = self.alpha_before_activation.data[~split_mask]
 
         # clone gaussians
-        new_mean[unchanged_gaussians:unchanged_gaussians + num_clone] = self.mean.data[clone_mask]
-        new_qvec[unchanged_gaussians:unchanged_gaussians + num_clone] = self.qvec.data[clone_mask]
-        new_svec[unchanged_gaussians:unchanged_gaussians + num_clone] = self.svec_before_activation.data[clone_mask]
-        new_color[unchanged_gaussians:unchanged_gaussians + num_clone] = self.color_before_activation.data[clone_mask]
-        new_alpha[unchanged_gaussians:unchanged_gaussians + num_clone] = self.alpha_before_activation.data[clone_mask]
+        new_mean[
+            unchanged_gaussians : unchanged_gaussians + num_clone
+        ] = self.mean.data[clone_mask]
+        new_qvec[
+            unchanged_gaussians : unchanged_gaussians + num_clone
+        ] = self.qvec.data[clone_mask]
+        new_svec[
+            unchanged_gaussians : unchanged_gaussians + num_clone
+        ] = self.svec_before_activation.data[clone_mask]
+        new_color[
+            unchanged_gaussians : unchanged_gaussians + num_clone
+        ] = self.color_before_activation.data[clone_mask]
+        new_alpha[
+            unchanged_gaussians : unchanged_gaussians + num_clone
+        ] = self.alpha_before_activation.data[clone_mask]
 
         pts = unchanged_gaussians + num_clone
-        
-        new_mean[pts: pts + 2 * num_split] = split_sampled_mean
-        new_qvec[pts: pts + 2 * num_split] = split_qvec
-        new_color[pts: pts + 2 * num_split] = split_color_ba
-        new_alpha[pts: pts + 2 * num_split] = split_alpha_ba
-        new_svec[pts: pts + 2 * num_split] = self.svec_inv_act(split_svec / self.scale_shrink_factor)
+
+        new_mean[pts : pts + 2 * num_split] = split_sampled_mean
+        new_qvec[pts : pts + 2 * num_split] = split_qvec
+        new_color[pts : pts + 2 * num_split] = split_color_ba
+        new_alpha[pts : pts + 2 * num_split] = split_alpha_ba
+        new_svec[pts : pts + 2 * num_split] = self.svec_inv_act(
+            split_svec / self.scale_shrink_factor
+        )
 
         self.mean = torch.nn.Parameter(new_mean)
         self.qvec = torch.nn.Parameter(new_qvec)
         self.svec_before_activation = torch.nn.Parameter(new_svec)
         self.color_before_activation = torch.nn.Parameter(new_color)
         self.alpha_before_activation = torch.nn.Parameter(new_alpha)
-        
 
     def remove_low_alpha_gaussians(self):
         mask = self.alpha_act(self.alpha_before_activation.data) >= self.alpha_thresh
         self.mean = torch.nn.Parameter(self.mean.data[mask])
         self.qvec = torch.nn.Parameter(self.qvec.data[mask])
-        self.color_before_activation = torch.nn.Parameter(self.color_before_activation.data[mask])
-        self.alpha_before_activation = torch.nn.Parameter(self.alpha_before_activation.data[mask])
-        self.svec_before_activation = torch.nn.Parameter(self.svec_before_activation.data[mask])
-        
+        self.color_before_activation = torch.nn.Parameter(
+            self.color_before_activation.data[mask]
+        )
+        self.alpha_before_activation = torch.nn.Parameter(
+            self.alpha_before_activation.data[mask]
+        )
+        self.svec_before_activation = torch.nn.Parameter(
+            self.svec_before_activation.data[mask]
+        )
+
         removed = self.N - self.mean.shape[0]
         self.N = self.mean.shape[0]
         console.print("[yellow]remove_low_alpha_gaussians[/yellow]")
-        console.print(f"[yellow]removed {removed} gaussians, remaining {self.N} gaussians")
+        console.print(
+            f"[yellow]removed {removed} gaussians, remaining {self.N} gaussians"
+        )
 
     def reset_alpha(self):
         console.print("[yellow]reset alpha[/yellow]")
         print(self.alpha_inv_act)
-        self.alpha_before_activation.data.fill_(self.alpha_inv_act(self.alpha_reset_val))
+        self.alpha_before_activation.data.fill_(
+            self.alpha_inv_act(self.alpha_reset_val)
+        )
         with torch.no_grad():
             print_info(self.alpha, "alpha")
 
@@ -898,12 +1307,24 @@ class GaussianRenderer(torch.nn.Module):
         writer.add_scalar("grad_bounds/mean_min", self.mean.grad.min(), step)
         writer.add_scalar("grad_bounds/qvec_max", self.qvec.grad.max(), step)
         writer.add_scalar("grad_bounds/qvec_min", self.qvec.grad.min(), step)
-        writer.add_scalar("grad_bounds/svec_max", self.svec_before_activation.grad.max(), step)
-        writer.add_scalar("grad_bounds/svec_min", self.svec_before_activation.grad.min(), step)
-        writer.add_scalar("grad_bounds/color_max", self.color_before_activation.grad.max(), step)
-        writer.add_scalar("grad_bounds/color_min", self.color_before_activation.grad.min(), step)
-        writer.add_scalar("grad_bounds/alpha_max", self.alpha_before_activation.grad.max(), step)
-        writer.add_scalar("grad_bounds/alpha_min", self.alpha_before_activation.grad.min(), step)
+        writer.add_scalar(
+            "grad_bounds/svec_max", self.svec_before_activation.grad.max(), step
+        )
+        writer.add_scalar(
+            "grad_bounds/svec_min", self.svec_before_activation.grad.min(), step
+        )
+        writer.add_scalar(
+            "grad_bounds/color_max", self.color_before_activation.grad.max(), step
+        )
+        writer.add_scalar(
+            "grad_bounds/color_min", self.color_before_activation.grad.min(), step
+        )
+        writer.add_scalar(
+            "grad_bounds/alpha_max", self.alpha_before_activation.grad.max(), step
+        )
+        writer.add_scalar(
+            "grad_bounds/alpha_min", self.alpha_before_activation.grad.min(), step
+        )
 
     @torch.no_grad()
     def log_info(self, writer, step):
@@ -926,16 +1347,19 @@ class GaussianRenderer(torch.nn.Module):
         writer.add_scalar("bounds/color_min", self.color.min(), step)
         writer.add_scalar("bounds/alpha_max", self.alpha.max(), step)
         writer.add_scalar("bounds/alpha_min", self.alpha.min(), step)
-        
+
     @torch.no_grad()
     def log_depth_and_radius(self, writer, step):
         """log the bounds of the parameters"""
-        writer.add_scalar("bounds/depth_max", self.depth.max(), step)
-        writer.add_scalar("bounds/depth_min", self.depth.min(), step)
-        writer.add_scalar("bounds/radius_max", self.radius.max(), step)
-        writer.add_scalar("bounds/radius_min", self.radius.min(), step)
-        writer.add_scalar("bounds/depth_mean", self.depth.mean(), step)
-        writer.add_scalar("bounds/radius_mean", self.radius.mean(), step)
+        if self.depth is not None:
+            writer.add_scalar("bounds/depth_max", self.depth.max(), step)
+            writer.add_scalar("bounds/depth_min", self.depth.min(), step)
+            writer.add_scalar("bounds/depth_mean", self.depth.mean(), step)
+
+        if self.radius is not None:
+            writer.add_scalar("bounds/radius_mean", self.radius.mean(), step)
+            writer.add_scalar("bounds/radius_max", self.radius.max(), step)
+            writer.add_scalar("bounds/radius_min", self.radius.min(), step)
 
     @torch.no_grad()
     def log(self, writer, step):
@@ -964,4 +1388,4 @@ class GaussianRenderer(torch.nn.Module):
     @classmethod
     def load(self, path):
         state_dict = torch.load(path)
-        renderer = Renderer(state_dict["cfg"])
+        renderer = Renderer(state_dict["cfg"], )

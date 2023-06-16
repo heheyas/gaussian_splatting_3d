@@ -1,5 +1,6 @@
 from typing import Any
 import cv2
+from pathlib import Path
 from utils.camera import PerspectiveCameras
 from utils.transforms import qsvec2rotmat_batched, qvec2rotmat_batched
 from utils.misc import print_info, tic, toc
@@ -14,6 +15,7 @@ from gs.culling import tile_culling_aabb_count
 from utils.misc import lineprofiler
 from timeit import timeit
 from time import time
+from .initialize import cov_init
 
 console = Console()
 
@@ -41,17 +43,7 @@ class SHRenderer(torch.nn.Module):
         super().__init__()
         self.device = cfg.device
         self.cfg = cfg
-        self.N = pts.shape[0]
         self.max_C = cfg.sh_order
-        self.mean = torch.nn.parameter.Parameter(pts)
-        self.qvec = torch.nn.Parameter(torch.zeros([self.N, 4]))
-        self.qvec.data[..., 0] = 1.0
-        self.sh_coeffs = torch.nn.Parameter(init_sh_coeffs(cfg, rgb, self.max_C))
-
-        self.now_C = 1
-
-        self.svec_before_activation = torch.nn.Parameter(torch.ones([self.N, 3]))
-        self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
 
         self.svec_act = activations[cfg.svec_act]
         self.alpha_act = activations[cfg.alpha_act]
@@ -59,10 +51,58 @@ class SHRenderer(torch.nn.Module):
         self.svec_inv_act = inv_activations[cfg.svec_act]
         self.alpha_inv_act = inv_activations[cfg.alpha_act]
 
-        self.svec_before_activation.data.fill_(self.svec_inv_act(cfg.svec_init))
-        self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
+        if pts is not None and rgb is not None:
+            # self.N = pts.shape[0]
+            # self.mean = torch.nn.parameter.Parameter(pts)
+            # self.qvec = torch.nn.Parameter(torch.zeros([self.N, 4]))
+            # self.qvec.data[..., 0] = 1.0
+            # self.sh_coeffs = torch.nn.Parameter(init_sh_coeffs(cfg, rgb, self.max_C))
+            # self.svec_before_activation = torch.nn.Parameter(torch.ones([self.N, 3]))
+            # self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
+            # self.svec_before_activation.data.fill_(self.svec_inv_act(cfg.svec_init))
+            # self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
+            self.initialize(cfg, pts, rgb)
+
+        self.now_C = 1
+
+        self.cum_grad = cfg.get("cum_grad", False)
+        if self.cum_grad:
+            self.register_buffer("max_grad_mean", torch.zeros_like(self.mean[..., 0]))
+            # self.register_buffer("max_grad_qvec", torch.zeros_like(self.qvec))
+            # self.register_buffer(
+            #     "max_grad_svec", torch.zeros_like(self.svec_before_activation)
+            # )
+            # self.register_buffer(
+            #     "max_grad_alpha", torch.zeros_like(self.alpha_before_activation)
+            # )
+            # self.register_buffer("max_grad_sh_coeffs", torch.zeros_like(self.sh_coeffs))
 
         self.set_cfg(cfg)
+
+    def initialize(self, cfg, pts, rgb):
+        self.N = pts.shape[0]
+        self.mean = torch.nn.parameter.Parameter(pts)
+        self.qvec = torch.nn.Parameter(torch.zeros([self.N, 4]))
+        self.qvec.data[..., 0] = 1.0
+        self.sh_coeffs = torch.nn.Parameter(init_sh_coeffs(cfg, rgb, self.max_C))
+
+        svec_init_method = cfg.get("svec_init_method", "nearest")
+        if svec_init_method == "fixed":
+            self.svec_before_activation = torch.nn.Parameter(torch.ones([self.N, 3]))
+            self.svec_before_activation.data.fill_(self.svec_inv_act(cfg.svec_init))
+        elif svec_init_method == "nearest":
+            init_svec = (cov_init(pts, cfg.get("nearest_k", 3)) * 10).clamp(
+                max=0.1, min=0.01
+            )
+            print_info(init_svec, "init_svec")
+            self.svec_before_activation = torch.nn.Parameter(
+                self.svec_inv_act(init_svec).unsqueeze(1).repeat(1, 3)
+            )
+        else:
+            raise NotImplementedError
+
+        self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
+        self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
 
     def set_cfg(self, cfg):
         # camera imaging params
@@ -85,9 +125,13 @@ class SHRenderer(torch.nn.Module):
         self.pos_grad_thresh = cfg.pos_grad_thresh
         self.split_scale_thresh = cfg.split_scale_thresh
         self.scale_shrink_factor = cfg.scale_shrink_factor
+        # !! deprecated
         self.alpha_reset_period = cfg.alpha_reset_period
         self.alpha_reset_val = cfg.alpha_reset_val
         self.alpha_thresh = cfg.alpha_thresh
+
+        self.remove_tiny_period = cfg.get("remove_tiny_period", 500)
+        self.remove_tiny = cfg.get("remove_tiny", False)
 
         # SH
         self.sh_upgrades = cfg.sh_upgrades
@@ -280,11 +324,20 @@ class SHRenderer(torch.nn.Module):
         writer.add_scalar("n_gaussian_dub", self.total_dub_gaussians, step)
 
     def split_gaussians(self):
-        assert self.mean.grad is not None, "mean.grad is None"
+        assert (
+            self.mean.grad is not None
+        ), "mean.grad is None while clone or split gaussians are performed according to spatial gradient of mean"
         console.print("[red bold]Splitting Gaussians")
-        mean_mask = self.mean.grad.norm(dim=-1) > self.pos_grad_thresh
+
+        # all the gaussians need split or clone
+        if self.cum_grad:
+            mean_mask = self.max_grad_mean > self.pos_grad_thresh
+        else:
+            mean_mask = self.mean.grad.norm(dim=-1) > self.pos_grad_thresh
         svec_mask = (self.svec.data > self.split_scale_thresh).any(dim=-1)
+        # gaussians need split are with large spatial scale
         split_mask = torch.logical_and(mean_mask, svec_mask)
+        # gaussians need clone are with small spatial scale
         clone_mask = torch.logical_and(mean_mask, torch.logical_not(split_mask))
 
         num_split = split_mask.sum().item()
@@ -292,13 +345,15 @@ class SHRenderer(torch.nn.Module):
 
         console.print(f"[red bold]num_split {num_split} num_clone {num_clone}")
 
+        # number of gaussians after split and clone will be increased by num_split + num_clone
         num_new_gaussians = num_split + num_clone
 
+        # split
         split_mean = self.mean.data[split_mask].repeat(2, 1)
         split_qvec = self.qvec.data[split_mask].repeat(2, 1)
         split_svec = self.svec.data[split_mask].repeat(2, 1)
         # split_svec_ba = self.svec_before_activation.data[split_mask].repeat(2, 1)
-        split_color_ba = self.color_before_activation.data[split_mask].repeat(2, 1)
+        split_sh_coeffs = self.sh_coeffs.data[split_mask].repeat(2, 1, 1)
         split_alpha_ba = self.alpha_before_activation.data[split_mask].repeat(2)
         split_rotmat = qvec2rotmat_batched(split_qvec).transpose(-1, -2)
 
@@ -318,14 +373,16 @@ class SHRenderer(torch.nn.Module):
         new_mean = torch.zeros([self.N, 3], device=self.device)
         new_qvec = torch.zeros([self.N, 4], device=self.device)
         new_svec = torch.zeros([self.N, 3], device=self.device)
-        new_color = torch.zeros([self.N, 3], device=self.device)
+        new_sh_coeffs = torch.zeros(
+            [self.N, 3, self.max_C * self.max_C], device=self.device
+        )
         new_alpha = torch.zeros([self.N], device=self.device)
 
-        # copy old gaussians
+        # copy old gaussians (# old_N - num_split)
         new_mean[:unchanged_gaussians] = self.mean.data[~split_mask]
         new_qvec[:unchanged_gaussians] = self.qvec.data[~split_mask]
         new_svec[:unchanged_gaussians] = self.svec_before_activation.data[~split_mask]
-        new_color[:unchanged_gaussians] = self.color_before_activation.data[~split_mask]
+        new_sh_coeffs[:unchanged_gaussians] = self.sh_coeffs.data[~split_mask]
         new_alpha[:unchanged_gaussians] = self.alpha_before_activation.data[~split_mask]
 
         # clone gaussians
@@ -338,9 +395,9 @@ class SHRenderer(torch.nn.Module):
         new_svec[
             unchanged_gaussians : unchanged_gaussians + num_clone
         ] = self.svec_before_activation.data[clone_mask]
-        new_color[
+        new_sh_coeffs[
             unchanged_gaussians : unchanged_gaussians + num_clone
-        ] = self.color_before_activation.data[clone_mask]
+        ] = self.sh_coeffs.data[clone_mask]
         new_alpha[
             unchanged_gaussians : unchanged_gaussians + num_clone
         ] = self.alpha_before_activation.data[clone_mask]
@@ -349,17 +406,22 @@ class SHRenderer(torch.nn.Module):
 
         new_mean[pts : pts + 2 * num_split] = split_sampled_mean
         new_qvec[pts : pts + 2 * num_split] = split_qvec
-        new_color[pts : pts + 2 * num_split] = split_color_ba
+        new_sh_coeffs[pts : pts + 2 * num_split] = split_sh_coeffs
         new_alpha[pts : pts + 2 * num_split] = split_alpha_ba
         new_svec[pts : pts + 2 * num_split] = self.svec_inv_act(
             split_svec / self.scale_shrink_factor
         )
 
+        assert pts + 2 * num_split == self.N
+
         self.mean = torch.nn.Parameter(new_mean)
         self.qvec = torch.nn.Parameter(new_qvec)
         self.svec_before_activation = torch.nn.Parameter(new_svec)
-        self.color_before_activation = torch.nn.Parameter(new_color)
+        self.sh_coeffs = torch.nn.Parameter(new_sh_coeffs)
         self.alpha_before_activation = torch.nn.Parameter(new_alpha)
+
+        if self.cum_grad:
+            self.max_grad_mean = torch.zeros_like(self.mean[..., 0])
 
     def remove_low_alpha_gaussians(self):
         mask = self.alpha_act(self.alpha_before_activation.data) >= self.alpha_thresh
@@ -388,6 +450,25 @@ class SHRenderer(torch.nn.Module):
         with torch.no_grad():
             print_info(self.alpha, "alpha")
 
+    def remove_tiny_gaussians(self):
+        mask = (self.svec > self.svec_tiny_thresh).all(dim=-1)
+        removed = self.N - mask.sum().item()
+        console.print(f"[red bold]removed {removed} gaussians[/red bold]")
+        self.mean = torch.nn.Parameter(self.mean.data[mask])
+        self.qvec = torch.nn.Parameter(self.qvec.data[mask])
+        self.sh_coeffs = torch.nn.Parameter(self.sh_coeffs.data[mask])
+        self.alpha_before_activation = torch.nn.Parameter(
+            self.alpha_before_activation.data[mask]
+        )
+        self.svec_before_activation = torch.nn.Parameter(
+            self.svec_before_activation.data[mask]
+        )
+
+    def update_max_grads(self):
+        self.max_grad_mean = torch.maximum(
+            self.max_grad_mean, self.mean.grad.norm(dim=-1)
+        )
+
     def adaptive_control(self, epoch):
         if epoch < self.warm_up:
             return
@@ -396,13 +477,29 @@ class SHRenderer(torch.nn.Module):
             self.now_C += 1
             self.now_C = min(self.now_C, self.max_C)
 
+        self.update_max_grads()
+
+        if step_check(epoch, self.adaptive_control_iteration):
+            self.split_gaussians()
+
+        if step_check(epoch, self.alpha_reset_period):
+            self.remove_low_alpha_gaussians()
+            self.reset_alpha()
+
+        if self.remove_tiny and step_check(epoch, self.remove_tiny_period):
+            self.remove_tiny_gaussians()
+
     def save(self, path):
+        path = Path(path)
+        parent = path.parent
+        if not parent.exists():
+            parent.mkdir(parents=True)
         state_dict = {
             "mean": self.mean.data,
             "qvec": self.qvec.data,
-            "log_svec": self.log_svec.data,
-            "color": self.color.data,
-            "alpha": self.alpha.data,
+            "svec_before_activation": self.svec_before_activation.data,
+            "sh_coeffs": self.sh_coeffs.data,
+            "alpha_before_activation": self.alpha_before_activation.data,
             "N": self.N,
             "cfg": self.cfg,
         }
@@ -414,3 +511,38 @@ class SHRenderer(torch.nn.Module):
         state_dict = torch.load(path)
 
         renderer = cls(state_dict["cfg"])
+        renderer.N = state_dict["N"]
+        renderer.mean = torch.nn.Parameter(state_dict["mean"])
+        renderer.qvec = torch.nn.Parameter(state_dict["qvec"])
+        renderer.svec_before_activation = torch.nn.Parameter(
+            state_dict["svec_before_activation"]
+        )
+        renderer.sh_coeffs = torch.nn.Parameter(state_dict["sh_coeffs"])
+        renderer.alpha_before_activation = torch.nn.Parameter(
+            state_dict["alpha_before_activation"]
+        )
+
+        assert renderer.N == renderer.mean.shape[0]
+
+        return renderer
+
+    def get_param_groups(self):
+        param_groups = {
+            "mean": self.mean,
+            "qvec": self.qvec,
+            "svec": self.svec_before_activation,
+            "sh_coeffs": self.sh_coeffs,
+            "alpha": self.alpha_before_activation,
+        }
+        return param_groups
+
+    def get_optimizer(self):
+        lr = self.cfg.lr
+
+        opt_params = []
+
+        param_groups = self.get_param_groups()
+        for name, params in param_groups.items():
+            opt_params.append({"params": params, "lr": self.cfg.get(f"{name}_lr", lr)})
+
+        return torch.optim.Adam(opt_params, lr=lr)

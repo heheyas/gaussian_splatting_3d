@@ -182,7 +182,11 @@ __host__ __device__ inline float kernel_gaussian_2d(float *mean, float *cov,
   double tmpy = -x * c1 + y * c0;
   double radial = tmpx * x + tmpy * y;
   radial /= det;
+  if (radial < 0.0) {
+    radial = 1000.0;
+  }
   float val = (float)exp(-0.5 * radial);
+  checkValue(val);
   assert(val <= 1.0f && val >= 0.0f);
 
   return val;
@@ -210,8 +214,15 @@ kernel_gaussian_2d(float *mean, float *cov, float query_x, float query_y) {
   double radial = tmpx * x + tmpy * y;
   radial /= det;
 
+  if (radial < 0.0) {
+    radial = 1000.0;
+  }
   float val = (float)exp(-0.5 * radial);
-  assert(val <= 1.0f && val >= 0.0f);
+  checkValue(val);
+  // if (!(val <= 1.0f && val >= 0.0f)) {
+  //   printf("val: %f\n", val);
+  // }
+  // assert(val <= 1.0f && val >= 0.0f);
 
   return val;
 }

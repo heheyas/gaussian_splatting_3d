@@ -10,6 +10,13 @@ _timing_ = False
 logger = logging.getLogger(__name__)
 
 
+def step_check(step, step_size, run_at_zero=False) -> bool:
+    """Returns true based on current step and step interval. credit: nerfstudio"""
+    if step_size == 0:
+        return False
+    return (run_at_zero or step != 0) and step % step_size == 0
+
+
 def tic():
     import time
 

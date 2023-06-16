@@ -6,9 +6,9 @@ timing: False
 device: cuda:0
 
 # data
-data_name: garden
-data_dir: ./data/garden
-image_dir: ./data/garden/images_4
+data_name: fern
+data_dir: ./data/llff
+image_dir: ./data/llff/images_4
 downsample: 4
 save_iteration: 1000
 
@@ -22,8 +22,6 @@ tile_culling_thresh: 0.01
 tile_culling_radius: 6.0
 
 # model
-svec_init_method: nearest
-nearest_k: 3
 random_init: False
 max_iteration: 10000
 lr: 1e-2
@@ -36,26 +34,21 @@ ssim_loss_win_size: 11
 
 # spherical harmonics
 sh_order: 3
-sh_upgrades: [2000, 4000]
+sh_upgrades: [2000, 3000]
 
 # activation functions
 alpha_act: sigmoid
 svec_act: exp
 
 # gaussian adaptive control
-adapt_ctrl_enabled: True
-warm_up: 500
+warm_up: 1000
 adaptive_control_iteration: 100
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
-alpha_reset_period: 100000000
+# alpha_reset_period: 300 # !! deprecated
 alpha_reset_val: 0.1
 alpha_thresh: 0.05
 split_scale_thresh: 0.02
-cum_grad: False
-
-# wandb
-wandb: True
 
 # viewer config
 viewer: False
@@ -63,13 +56,4 @@ viewer_port: 1234
 
 # tests
 only_forward: False
-
-# lrs
-mean_lr: 1e-3
-qvec_lr: 1e-2
-svec_lr: 1e-2
-sh_coeffs_lr: 1e-2
-alpha_lr: 1e-2
-
-# misc
-comment: ""
+pos_lr: 1e-3

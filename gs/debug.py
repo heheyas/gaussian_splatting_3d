@@ -10,6 +10,7 @@ from torchtyping import TensorType
 import torch
 import matplotlib.pyplot as plt
 from culling import tile_culling_aabb_count
+from utils.transforms import qvec2rotmat_batched
 
 try:
     import _gs as _backend
@@ -1202,3 +1203,37 @@ class MockRenderer(torch.nn.Module):
 
         loss = torch.nn.functional.mse_loss(out, target)
         loss.backward()
+
+    def test_split(self):
+        num_split = 1
+        split_mask = torch.ones([1], dtype=torch.bool, device=self.device)
+
+        NN = 16
+
+        split_mean = self.mean.data[split_mask].squeeze().repeat(NN, 1)
+        split_qvec = self.qvec.data[split_mask].squeeze().repeat(NN, 1)
+        split_log_svec = self.log_svec.data[split_mask].squeeze().repeat(NN, 1)
+
+        split_rotmat = qvec2rotmat_batched(split_qvec).transpose(-1, -2)
+
+        split_color = self.color.data[split_mask].squeeze().repeat(NN, 1)
+        split_alpha = self.alpha.data[split_mask].squeeze().repeat(NN)
+
+        split_gn = (
+            torch.randn(num_split * NN, 3, device=self.mean.device)
+            * split_log_svec.exp()
+        )
+
+        split_sampled_mean = split_mean + torch.einsum(
+            "bij, bj -> bi", split_rotmat, split_gn
+        )
+
+        self.mean = torch.nn.Parameter(split_sampled_mean)
+        self.qvec = torch.nn.Parameter(split_qvec)
+        self.log_svec = torch.nn.Parameter(torch.log(split_log_svec.exp() / NN))
+        self.color = torch.nn.Parameter(split_color)
+        self.alpha = torch.nn.Parameter(split_alpha)
+
+        self.N = NN
+
+        self.sh_render_sanity_check()

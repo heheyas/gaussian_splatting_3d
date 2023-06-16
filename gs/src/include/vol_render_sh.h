@@ -262,7 +262,7 @@ __device__ void vol_render_one_batch_sh_backward(
     }
     float alpha_ = fminf(alpha[i], 0.99f);
     float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
-    assert(G >= 0.0f && G <= 1.0f);
+    // assert(G >= 0.0f && G <= 1.0f);
     if (alpha_ * G < MIN_RENDER_ALPHA) {
       continue;
     }
@@ -564,187 +564,190 @@ void tile_based_vol_rendering_backward_sh_cuda_v1(
   checkLastCudaError(last_error);
 }
 
-template <uint32_t C>
-__global__ void tile_based_vol_rendering_backward_sh_entry_v1(
-    uint32_t N, uint32_t N_with_dub, float *__restrict__ mean,
-    float *__restrict__ cov, float *__restrict__ sh_coeffs,
-    float *__restrict__ alpha, int *__restrict__ start, int *__restrict__ end,
-    int *__restrict__ gaussian_ids, float *__restrict__ out_rgb,
-    float *__restrict__ grad_mean, float *__restrict__ grad_cov,
-    float *__restrict__ grad_sh_coeffs, float *__restrict__ grad_alpha,
-    float *__restrict__ grad_out_rgb, float *__restrict__ topleft,
-    float *__restrict__ c2w, uint32_t tile_size, uint32_t n_tiles_h,
-    uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H,
-    uint32_t W, float thresh) {
-  int local_id = threadIdx.x;
-  int local_y = local_id / tile_size;
-  int local_x = local_id % tile_size;
-  int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
-  int global_y = blockIdx.y * tile_size + local_y;
-  int global_x = blockIdx.x * tile_size + local_x;
-  if (start[tile_id] == -1) {
-    // skip
-    return;
-  }
-  int n_gaussians_this_tile = end[tile_id] - start[tile_id];
-  if (n_gaussians_this_tile == 0) {
-    return;
-  }
+// template <uint32_t C>
+// __global__ void tile_based_vol_rendering_backward_sh_entry_v1(
+//     uint32_t N, uint32_t N_with_dub, float *__restrict__ mean,
+//     float *__restrict__ cov, float *__restrict__ sh_coeffs,
+//     float *__restrict__ alpha, int *__restrict__ start, int *__restrict__
+//     end, int *__restrict__ gaussian_ids, float *__restrict__ out_rgb, float
+//     *__restrict__ grad_mean, float *__restrict__ grad_cov, float
+//     *__restrict__ grad_sh_coeffs, float *__restrict__ grad_alpha, float
+//     *__restrict__ grad_out_rgb, float *__restrict__ topleft, float
+//     *__restrict__ c2w, uint32_t tile_size, uint32_t n_tiles_h, uint32_t
+//     n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H, uint32_t
+//     W, float thresh) {
+//   int local_id = threadIdx.x;
+//   int local_y = local_id / tile_size;
+//   int local_x = local_id % tile_size;
+//   int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
+//   int global_y = blockIdx.y * tile_size + local_y;
+//   int global_x = blockIdx.x * tile_size + local_x;
+//   if (start[tile_id] == -1) {
+//     // skip
+//     return;
+//   }
+//   int n_gaussians_this_tile = end[tile_id] - start[tile_id];
+//   if (n_gaussians_this_tile == 0) {
+//     return;
+//   }
 
-  int n_float_per_gaussian = 2 + 4 + 3 * C * C + 1;
-  n_float_per_gaussian *= 2; // for backward
-  n_float_per_gaussian += 1;
-  // mean + cov + color + alpha + gaussian_id
-  int n_pixel_per_tile = tile_size * tile_size;
-  int max_gaussian_sm = (MAX_N_FLOAT_SM) / n_float_per_gaussian;
+//   int n_float_per_gaussian = 2 + 4 + 3 * C * C + 1;
+//   n_float_per_gaussian *= 2; // for backward
+//   n_float_per_gaussian += 1;
+//   // mean + cov + color + alpha + gaussian_id
+//   int n_pixel_per_tile = tile_size * tile_size;
+//   int max_gaussian_sm = (MAX_N_FLOAT_SM) / n_float_per_gaussian;
 
-  float grad_out[3];
-  float final[3];
-  float out[3] = {0.0f, 0.0f, 0.0f};
-  float cum_alpha = 1.0f;
+//   float grad_out[3];
+//   float final[3];
+//   float out[3] = {0.0f, 0.0f, 0.0f};
+//   float cum_alpha = 1.0f;
 
-  float sh_consts[C * C];
-  float direction[3];
-  float pos[3] = {topleft[0] + global_x * pixel_size_x,
-                  topleft[1] + global_y * pixel_size_y, 1.0f};
-  calc_direction(direction, pos, c2w);
-  spherical_harmonic(direction, sh_consts, C);
+//   float sh_consts[C * C];
+//   float direction[3];
+//   float pos[3] = {topleft[0] + global_x * pixel_size_x,
+//                   topleft[1] + global_y * pixel_size_y, 1.0f};
+//   calc_direction(direction, pos, c2w);
+//   spherical_harmonic(direction, sh_consts, C);
 
-  __shared__ float sm[MAX_N_FLOAT_SM];
-  float *sm_mean = sm;
-  float *sm_cov = sm_mean + 2 * max_gaussian_sm;
-  float *sm_sh_coeffs = sm_cov + 4 * max_gaussian_sm;
-  float *sm_alpha = sm_sh_coeffs + 3 * C * C * max_gaussian_sm;
+//   __shared__ float sm[MAX_N_FLOAT_SM];
+//   float *sm_mean = sm;
+//   float *sm_cov = sm_mean + 2 * max_gaussian_sm;
+//   float *sm_sh_coeffs = sm_cov + 4 * max_gaussian_sm;
+//   float *sm_alpha = sm_sh_coeffs + 3 * C * C * max_gaussian_sm;
 
-  float *sm_grad_mean = sm_alpha + 1 * max_gaussian_sm;
-  float *sm_grad_cov = sm_grad_mean + 2 * max_gaussian_sm;
-  float *sm_grad_sh_coeffs = sm_grad_cov + 4 * max_gaussian_sm;
-  float *sm_grad_alpha = sm_grad_sh_coeffs + 3 * C * C * max_gaussian_sm;
+//   float *sm_grad_mean = sm_alpha + 1 * max_gaussian_sm;
+//   float *sm_grad_cov = sm_grad_mean + 2 * max_gaussian_sm;
+//   float *sm_grad_sh_coeffs = sm_grad_cov + 4 * max_gaussian_sm;
+//   float *sm_grad_alpha = sm_grad_sh_coeffs + 3 * C * C * max_gaussian_sm;
 
-  int *sm_gaussian_ids = (int *)(sm_grad_alpha + 1 * max_gaussian_sm);
+//   int *sm_gaussian_ids = (int *)(sm_grad_alpha + 1 * max_gaussian_sm);
 
-  if (global_x < W && global_y < H) {
-#pragma unroll
-    for (size_t i = 0; i < 3; ++i) {
-      grad_out[i] = grad_out_rgb[3 * (global_y * W + global_x) + i];
-      final[i] = out_rgb[3 * (global_y * W + global_x) + i];
-    }
-  }
+//   if (global_x < W && global_y < H) {
+// #pragma unroll
+//     for (size_t i = 0; i < 3; ++i) {
+//       grad_out[i] = grad_out_rgb[3 * (global_y * W + global_x) + i];
+//       final[i] = out_rgb[3 * (global_y * W + global_x) + i];
+//     }
+//   }
 
-  gaussian_ids += start[tile_id];
+//   gaussian_ids += start[tile_id];
 
-  for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
-    int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
-    direct_carry(num_gaussian_sm, 1, sm_gaussian_ids, gaussian_ids);
-    carry(num_gaussian_sm, 2, sm_mean, mean, sm_gaussian_ids);
-    carry(num_gaussian_sm, 4, sm_cov, cov, sm_gaussian_ids);
-    carry(num_gaussian_sm, 3 * C * C, sm_sh_coeffs, sh_coeffs, sm_gaussian_ids);
-    carry(num_gaussian_sm, 1, sm_alpha, alpha, sm_gaussian_ids);
-    set_zero(2 * num_gaussian_sm, sm_grad_mean);
-    set_zero(4 * num_gaussian_sm, sm_grad_cov);
-    set_zero(3 * num_gaussian_sm * C * C, sm_grad_sh_coeffs);
-    set_zero(1 * num_gaussian_sm, sm_grad_alpha);
-    __syncthreads();
-    vol_render_one_batch_sh_backward<C>(
-        num_gaussian_sm, sm_mean, sm_cov, sm_sh_coeffs, sm_alpha, sm_grad_mean,
-        sm_grad_cov, sm_grad_sh_coeffs, sm_grad_alpha, grad_out, final, out,
-        cum_alpha, sh_consts, topleft, tile_size, n_tiles_h, n_tiles_w,
-        pixel_size_x, pixel_size_y, H, W, thresh);
-    __syncthreads();
-    carry_back(num_gaussian_sm, 2, sm_grad_mean, grad_mean, NULL,
-               sm_gaussian_ids);
-    carry_back(num_gaussian_sm, 4, sm_grad_cov, grad_cov, NULL,
-               sm_gaussian_ids);
-    carry_back(num_gaussian_sm, 3 * C * C, sm_grad_sh_coeffs, grad_sh_coeffs,
-               NULL, sm_gaussian_ids);
-    carry_back(num_gaussian_sm, 1, sm_grad_alpha, grad_alpha, NULL,
-               sm_gaussian_ids);
-    __syncthreads();
-    gaussian_ids += num_gaussian_sm;
-  }
-  if (global_x >= W || global_y >= H) {
-    return;
-  }
-  if (out_rgb[3 * (global_y * W + global_x) + 0] != out[0]) {
-    printf("out_rgb[3 * (global_y * W + global_x) + 0] = %f, out[0] = %f\n",
-           out_rgb[3 * (global_y * W + global_x) + 0], out[0]);
-  }
-  assert(out_rgb[3 * (global_y * W + global_x) + 0] == out[0]);
-  assert(out_rgb[3 * (global_y * W + global_x) + 1] == out[1]);
-  assert(out_rgb[3 * (global_y * W + global_x) + 2] == out[2]);
-}
+//   for (int n = 0; n < n_gaussians_this_tile; n += max_gaussian_sm) {
+//     int num_gaussian_sm = min(max_gaussian_sm, n_gaussians_this_tile - n);
+//     direct_carry(num_gaussian_sm, 1, sm_gaussian_ids, gaussian_ids);
+//     carry(num_gaussian_sm, 2, sm_mean, mean, sm_gaussian_ids);
+//     carry(num_gaussian_sm, 4, sm_cov, cov, sm_gaussian_ids);
+//     carry(num_gaussian_sm, 3 * C * C, sm_sh_coeffs, sh_coeffs,
+//     sm_gaussian_ids); carry(num_gaussian_sm, 1, sm_alpha, alpha,
+//     sm_gaussian_ids); set_zero(2 * num_gaussian_sm, sm_grad_mean); set_zero(4
+//     * num_gaussian_sm, sm_grad_cov); set_zero(3 * num_gaussian_sm * C * C,
+//     sm_grad_sh_coeffs); set_zero(1 * num_gaussian_sm, sm_grad_alpha);
+//     __syncthreads();
+//     vol_render_one_batch_sh_backward<C>(
+//         num_gaussian_sm, sm_mean, sm_cov, sm_sh_coeffs, sm_alpha,
+//         sm_grad_mean, sm_grad_cov, sm_grad_sh_coeffs, sm_grad_alpha,
+//         grad_out, final, out, cum_alpha, sh_consts, topleft, tile_size,
+//         n_tiles_h, n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+//     __syncthreads();
+//     carry_back(num_gaussian_sm, 2, sm_grad_mean, grad_mean, NULL,
+//                sm_gaussian_ids);
+//     carry_back(num_gaussian_sm, 4, sm_grad_cov, grad_cov, NULL,
+//                sm_gaussian_ids);
+//     carry_back(num_gaussian_sm, 3 * C * C, sm_grad_sh_coeffs, grad_sh_coeffs,
+//                NULL, sm_gaussian_ids);
+//     carry_back(num_gaussian_sm, 1, sm_grad_alpha, grad_alpha, NULL,
+//                sm_gaussian_ids);
+//     __syncthreads();
+//     gaussian_ids += num_gaussian_sm;
+//   }
+//   if (global_x >= W || global_y >= H) {
+//     return;
+//   }
+//   if (out_rgb[3 * (global_y * W + global_x) + 0] != out[0]) {
+//     printf("out_rgb[3 * (global_y * W + global_x) + 0] = %f, out[0] = %f\n",
+//            out_rgb[3 * (global_y * W + global_x) + 0], out[0]);
+//   }
+//   assert(out_rgb[3 * (global_y * W + global_x) + 0] == out[0]);
+//   assert(out_rgb[3 * (global_y * W + global_x) + 1] == out[1]);
+//   assert(out_rgb[3 * (global_y * W + global_x) + 2] == out[2]);
+// }
 
-typedef cub::BlockReduce<float, N_THREADS> BlockReduce;
+// typedef cub::BlockReduce<float, N_THREADS> BlockReduce;
 
-template <uint32_t C>
-__device__ void vol_render_one_batch_sh_backward_v_reduce(
-    uint32_t N_gaussians_this_time, float *__restrict__ mean,
-    float *__restrict__ cov, float *__restrict__ sh_coeffs,
-    float *__restrict__ alpha, float *__restrict__ grad_mean,
-    float *__restrict__ grad_cov, float *__restrict__ grad_sh_coeffs,
-    float &grad_alpha, float *__restrict__ grad_out, float *__restrict__ final,
-    float *__restrict__ out, float &cum_alpha, float *__restrict__ sh_consts,
-    float *__restrict__ topleft, uint32_t tile_size, uint32_t n_tiles_h,
-    uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H,
-    uint32_t W, float thresh, typename BlockReduce::TempStorage &temp_storage) {
-  int local_id = threadIdx.x;
-  // check row major here
-  int local_y = local_id / tile_size;
-  int local_x = local_id % tile_size;
-  int global_y = blockIdx.y * tile_size + local_y;
-  int global_x = blockIdx.x * tile_size + local_x;
-  if (global_y >= H || global_x >= W) {
-    return;
-  }
-  uint32_t CC = C * C;
+// template <uint32_t C>
+// __device__ void vol_render_one_batch_sh_backward_v_reduce(
+//     uint32_t N_gaussians_this_time, float *__restrict__ mean,
+//     float *__restrict__ cov, float *__restrict__ sh_coeffs,
+//     float *__restrict__ alpha, float *__restrict__ grad_mean,
+//     float *__restrict__ grad_cov, float *__restrict__ grad_sh_coeffs,
+//     float &grad_alpha, float *__restrict__ grad_out, float *__restrict__
+//     final, float *__restrict__ out, float &cum_alpha, float *__restrict__
+//     sh_consts, float *__restrict__ topleft, uint32_t tile_size, uint32_t
+//     n_tiles_h, uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y,
+//     uint32_t H, uint32_t W, float thresh, typename BlockReduce::TempStorage
+//     &temp_storage) {
+//   int local_id = threadIdx.x;
+//   // check row major here
+//   int local_y = local_id / tile_size;
+//   int local_x = local_id % tile_size;
+//   int global_y = blockIdx.y * tile_size + local_y;
+//   int global_x = blockIdx.x * tile_size + local_x;
+//   if (global_y >= H || global_x >= W) {
+//     return;
+//   }
+//   uint32_t CC = C * C;
 
-  // position in camera coordinate
-  float pos[2] = {topleft[0] + global_x * pixel_size_x,
-                  topleft[1] + global_y * pixel_size_y};
+//   // position in camera coordinate
+//   float pos[2] = {topleft[0] + global_x * pixel_size_x,
+//                   topleft[1] + global_y * pixel_size_y};
 
-  for (int i = 0; i < N_gaussians_this_time; ++i) {
-    if (cum_alpha < thresh) {
-      break;
-    }
-    float alpha_ = fminf(alpha[i], 0.99f);
-    float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
-    assert(G >= 0.0f && G <= 1.0f);
-    if (alpha_ * G < MIN_RENDER_ALPHA) {
-      continue;
-    }
-    float coeff = alpha_ * cum_alpha * G; // a * T * G
-    checkValue(coeff);
-    float y0 = SIGMOID(sum_C<C>(sh_coeffs + 3 * i * CC, sh_consts));
-    float y1 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 1) * CC, sh_consts));
-    float y2 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 2) * CC, sh_consts));
-    out[0] += coeff * y0;
-    out[1] += coeff * y1;
-    out[2] += coeff * y2;
-    backward_C_nonatomic<C>(grad_sh_coeffs, sh_consts,
-                            coeff * SIGMOID_DSIGMOID(y0) * grad_out[0]);
-    backward_C_nonatomic<C>(grad_sh_coeffs + CC, sh_consts,
-                            coeff * SIGMOID_DSIGMOID(y1) * grad_out[1]);
-    backward_C_nonatomic<C>(grad_sh_coeffs + 2 * CC, sh_consts,
-                            coeff * SIGMOID_DSIGMOID(y2) * grad_out[2]);
+//   for (int i = 0; i < N_gaussians_this_time; ++i) {
+//     if (cum_alpha < thresh) {
+//       break;
+//     }
+//     float alpha_ = fminf(alpha[i], 0.99f);
+//     float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
+//     assert(G >= 0.0f && G <= 1.0f);
+//     if (alpha_ * G < MIN_RENDER_ALPHA) {
+//       continue;
+//     }
+//     float coeff = alpha_ * cum_alpha * G; // a * T * G
+//     checkValue(coeff);
+//     float y0 = SIGMOID(sum_C<C>(sh_coeffs + 3 * i * CC, sh_consts));
+//     float y1 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 1) * CC, sh_consts));
+//     float y2 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 2) * CC, sh_consts));
+//     out[0] += coeff * y0;
+//     out[1] += coeff * y1;
+//     out[2] += coeff * y2;
+//     backward_C_nonatomic<C>(grad_sh_coeffs, sh_consts,
+//                             coeff * SIGMOID_DSIGMOID(y0) * grad_out[0]);
+//     backward_C_nonatomic<C>(grad_sh_coeffs + CC, sh_consts,
+//                             coeff * SIGMOID_DSIGMOID(y1) * grad_out[1]);
+//     backward_C_nonatomic<C>(grad_sh_coeffs + 2 * CC, sh_consts,
+//                             coeff * SIGMOID_DSIGMOID(y2) * grad_out[2]);
 
-    checkValue(out[0]);
-    checkValue(out[1]);
-    checkValue(out[2]);
+//     checkValue(out[0]);
+//     checkValue(out[1]);
+//     checkValue(out[2]);
 
-    double partial_aG = 0.0;
-    partial_aG +=
-        grad_out[0] * (y0 * cum_alpha - (final[0] - out[0]) / (1 - alpha_ * G));
-    partial_aG +=
-        grad_out[1] * (y1 * cum_alpha - (final[1] - out[1]) / (1 - alpha_ * G));
-    partial_aG +=
-        grad_out[2] * (y2 * cum_alpha - (final[2] - out[2]) / (1 - alpha_ * G));
-    kernel_gaussian_2d_backward_nonatomic(mean + 2 * i, cov + 4 * i, pos,
-                                          grad_mean, grad_cov,
-                                          partial_aG * alpha_ * G);
-    // atomicAdd(grad_alpha + i, partial_aG * G);
-    grad_alpha += partial_aG * G;
-    cum_alpha *= (1 - alpha_ * G);
-    // sh_coeffs += 3 * C * C;
-    // grad_sh_coeffs += 3 * C * C;
-  }
-}
+//     double partial_aG = 0.0;
+//     partial_aG +=
+//         grad_out[0] * (y0 * cum_alpha - (final[0] - out[0]) / (1 - alpha_ *
+//         G));
+//     partial_aG +=
+//         grad_out[1] * (y1 * cum_alpha - (final[1] - out[1]) / (1 - alpha_ *
+//         G));
+//     partial_aG +=
+//         grad_out[2] * (y2 * cum_alpha - (final[2] - out[2]) / (1 - alpha_ *
+//         G));
+//     kernel_gaussian_2d_backward_nonatomic(mean + 2 * i, cov + 4 * i, pos,
+//                                           grad_mean, grad_cov,
+//                                           partial_aG * alpha_ * G);
+//     // atomicAdd(grad_alpha + i, partial_aG * G);
+//     grad_alpha += partial_aG * G;
+//     cum_alpha *= (1 - alpha_ * G);
+//     // sh_coeffs += 3 * C * C;
+//     // grad_sh_coeffs += 3 * C * C;
+//   }
+// }

@@ -171,3 +171,5 @@ logs/
 *.sqlite
 *.qdrep
 profile_outputs/
+saved/
+wandb/

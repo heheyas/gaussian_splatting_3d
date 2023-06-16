@@ -9,7 +9,7 @@ from gs.renderer import GaussianRenderer
 from gs.sh_renderer import SHRenderer
 from utils.camera import get_c2ws_and_camera_info, get_c2ws_and_camera_info_v1
 from functools import partial
-from utils.misc import print_info, save_img, tic, toc, lineprofiler
+from utils.misc import print_info, save_img, tic, toc, lineprofiler, step_check
 from utils import misc
 from utils.loss import get_loss_fn
 import visdom
@@ -17,6 +17,7 @@ import visdom
 from rich.console import Console
 from tqdm import tqdm
 import wandb
+
 from torch.utils.tensorboard import SummaryWriter
 import datetime
 import logging
@@ -25,14 +26,25 @@ console = Console()
 
 
 @hydra.main(config_path="conf", config_name="garden_sh")
+@lineprofiler
 def main(cfg):
     logger = logging.getLogger(__name__)
     if cfg.viewer:
         logger.info("Viewer enabled")
     os.chdir(hydra.utils.get_original_cwd())
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    writer = SummaryWriter(f"./logs/runs/{cfg.data_name}/{timestamp}")
-    print(cfg.debug)
+
+    if cfg.wandb:
+        wandb.init(
+            project="gs",
+            config=cfg,
+            name=f"{cfg.data_name}_{timestamp}",
+            sync_tensorboard=True,
+            # tensorboard=True,
+        )
+    writer = SummaryWriter(
+        f"./logs/runs/{cfg.data_name}/{timestamp}", comment=cfg.comment
+    )
     if cfg.debug:
         global debug
         debug = True
@@ -59,7 +71,7 @@ def main(cfg):
     # loss_fn = torch.nn.functional.mse_loss
     loss_fn = get_loss_fn(cfg)
 
-    opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
+    opt = renderer.get_optimizer()
 
     if cfg.get("viewer", False):
         from utils.viewer.viser_viewer import ViserViewer
@@ -70,7 +82,9 @@ def main(cfg):
 
     log_iteration = cfg.get("log_iteration", 50)
     only_forward = cfg.get("only_forward", False)
-    warm_up = cfg.get("warm_up", 1000)
+
+    writer.add_text("cfg", str(cfg))
+    writer.add_text("comment", cfg.comment)
 
     with tqdm(total=cfg.max_iteration) as pbar:
         for e in range(cfg.max_iteration):
@@ -81,8 +95,6 @@ def main(cfg):
             if e == 0:
                 print_info(out, "out")
                 print("num total gaussian", renderer.total_dub_gaussians)
-                if cfg.debug:
-                    exit(0)
             if only_forward:
                 pbar.update(1)
                 continue
@@ -94,7 +106,7 @@ def main(cfg):
             with torch.autograd.profiler.profile(enabled=cfg.timing) as prof:
                 loss.backward()
             toc("backward")
-            if e % log_iteration == 0:
+            if step_check(e, log_iteration, True):
                 save_img(
                     out.cpu().clamp(min=0.0, max=1.0),
                     f"./tmp/{cfg.data_name}_sh",
@@ -112,16 +124,22 @@ def main(cfg):
                     "out", out.cpu().moveaxis(-1, 0).clamp(min=0, max=1.0), e
                 )
                 renderer.log(writer, e)
+
             opt.step()
 
-            if e > warm_up:
+            if cfg.adapt_ctrl_enabled:
                 renderer.adaptive_control(e)
-            opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
+
+            # opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
+            opt = renderer.get_optimizer()
 
             # logger.info(f"Iteration: {e}/{cfg.max_iteration} loss: {loss.item():.4f}")
             pbar.set_description(f"Iteration: {e}/{cfg.max_iteration}")
             pbar.set_postfix(loss=f"{loss.item():.4f}")
             pbar.update(1)
+
+            if step_check(e, cfg.save_iteration):
+                renderer.save(f"./saved/{timestamp}_{cfg.data_name}_sh/model_{e}.pt")
 
             if cfg.viewer:
                 while viewer.pause_training:

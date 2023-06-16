@@ -5,6 +5,7 @@ from utils.camera import CameraInfo
 from typing import Tuple
 
 
+@torch.no_grad()
 def tile_culling_aabb_count(
     mean: TensorType["N", 2],
     cov: TensorType["N", 2, 2],

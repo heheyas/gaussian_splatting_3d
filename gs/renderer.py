@@ -380,7 +380,7 @@ def jacobian(u):
 @lineprofiler
 def project_pts(pts: torch.Tensor, c2w: TensorType["N", 3, 4]):
     d = -c2w[..., :3, 3]
-    W = torch.transpose(c2w[..., :3, :3], -1, -2).contiguous()
+    W = torch.transpose(c2w[..., :3, :3], -1, -2)
 
     ret = torch.einsum("ij,bj->bi", W, pts + d)
 
@@ -394,7 +394,7 @@ def project_gaussians(
     svec: TensorType["N", 3],
     c2w: TensorType[3, 4],
 ):
-    projected_mean = project_pts(mean.detach(), c2w)
+    projected_mean = project_pts(mean, c2w)
     rotmat = qsvec2rotmat_batched(qvec, svec)
     sigma = rotmat @ torch.transpose(rotmat, -1, -2)
     W = torch.transpose(c2w[:3, :3], -1, -2)
@@ -404,8 +404,13 @@ def project_gaussians(
     projected_cov = torch.bmm(torch.bmm(JW, sigma), torch.transpose(JW, -1, -2))[
         ..., :2, :2
     ].contiguous()
-    depth = projected_mean[..., 2:].clone().contiguous()
-    projected_mean = (projected_mean[..., :2] / projected_mean[..., 2:]).contiguous()
+    depth = projected_mean[..., 2:].clone().contiguous().detach()
+
+    ###
+    ### HUGE CAUTION HERE !!! the denominator here is detached
+    ###
+    # projected_mean = (projected_mean[..., :2] / projected_mean[..., 2:]).contiguous()
+    projected_mean = projected_mean[..., :2].contiguous() / depth
 
     return projected_mean, projected_cov, JW, depth
 
@@ -848,32 +853,9 @@ class GaussianRenderer(torch.nn.Module):
 
         self.set_cfg(cfg)
 
-        # # camera imaging params
-        # self.near_plane = cfg.near_plane
-        # self.far_plane = cfg.far_plane
-        # self.tile_size = cfg.tile_size
-
-        # # frustum culling params
-        # self.frustum_culling_radius = cfg.frustum_culling_radius
-
-        # # tile culling params
-        # self.tile_culling_type = cfg.tile_culling_type
-        # self.tile_culling_radius = cfg.tile_culling_radius
-        # self.tile_culling_thresh = cfg.tile_culling_thresh
-
-        # # rendering params
-        # self.T_thresh = cfg.T_thresh
-
-        # # adaptive control params
-        # self.pos_grad_thresh = cfg.pos_grad_thresh
-        # self.split_scale_thresh = cfg.split_scale_thresh
-        # self.scale_shrink_factor = cfg.scale_shrink_factor
-        # self.alpha_reset_period = cfg.alpha_reset_period
-        # self.alpha_reset_val = cfg.alpha_reset_val
-        # self.alpha_thresh = cfg.alpha_thresh
-
     def set_cfg(self, cfg):
         # camera imaging params
+        # !! deprecated: should be provided in `camera_info` when calling forward
         # self.near_plane = cfg.near_plane
         # self.far_plane = cfg.far_plane
         self.tile_size = cfg.tile_size
@@ -1388,4 +1370,6 @@ class GaussianRenderer(torch.nn.Module):
     @classmethod
     def load(self, path):
         state_dict = torch.load(path)
-        renderer = Renderer(state_dict["cfg"], )
+        renderer = Renderer(
+            state_dict["cfg"],
+        )

@@ -8,6 +8,8 @@ from omegaconf import OmegaConf
 from utils.camera import CameraInfo
 from utils.transforms import qvec2rotmat
 import cv2
+from collections import deque
+
 
 def get_c2w(camera):
     c2w = np.zeros([3, 4], dtype=np.float32)
@@ -26,24 +28,43 @@ class ViserViewer:
         self.device = cfg.device
         self.port = cfg.viewer_port
 
+        self.render_times = deque(maxlen=3)
         self.server = viser.ViserServer(port=self.port)
         self.reset_view_button = self.server.add_gui_button("Reset View")
-        
+
         self.need_update = False
 
         self.pause_training = False
 
-        self.train_viewer_update_period_slider = self.server.add_gui_slider("Train Viewer Update Period", min=1, max=100, step=1, initial_value=10, disabled=self.pause_training)
-        
+        self.train_viewer_update_period_slider = self.server.add_gui_slider(
+            "Train Viewer Update Period",
+            min=1,
+            max=100,
+            step=1,
+            initial_value=10,
+            disabled=self.pause_training,
+        )
+
         self.pause_training_button = self.server.add_gui_button("Pause Training")
-        self.resolution_slider = self.server.add_gui_slider("Resolution", min=384, max=4096, step=2, initial_value=1024)
-        self.near_plane_slider = self.server.add_gui_slider("Near", min=0.1, max=30, step=0.5, initial_value=0.1)
+        self.sh_order = self.server.add_gui_slider(
+            "SH Order", min=1, max=4, step=1, initial_value=1
+        )
+        self.resolution_slider = self.server.add_gui_slider(
+            "Resolution", min=384, max=4096, step=2, initial_value=1024
+        )
+        self.near_plane_slider = self.server.add_gui_slider(
+            "Near", min=0.1, max=30, step=0.5, initial_value=0.1
+        )
         self.far_plane_slider = self.server.add_gui_slider(
             "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0
         )
 
-        self.show_train_camera = self.server.add_gui_checkbox("Show Train Camera", initial_value=False)
-        
+        self.show_train_camera = self.server.add_gui_checkbox(
+            "Show Train Camera", initial_value=False
+        )
+
+        self.fps = self.server.add_gui_text("FPS", initial_value="-1", disabled=True)
+
         @self.show_train_camera.on_update
         def _(_):
             self.need_update = True
@@ -51,11 +72,11 @@ class ViserViewer:
         @self.resolution_slider.on_update
         def _(_):
             self.need_update = True
-            
+
         @self.near_plane_slider.on_update
         def _(_):
             self.need_update = True
-            
+
         @self.far_plane_slider.on_update
         def _(_):
             self.need_update = True
@@ -64,13 +85,17 @@ class ViserViewer:
         def _(_):
             self.pause_training = not self.pause_training
             self.train_viewer_update_period_slider.disabled = not self.pause_training
-            self.pause_training_button.name = "Resume Training" if self.pause_training else "Pause Training"
+            self.pause_training_button.name = (
+                "Resume Training" if self.pause_training else "Pause Training"
+            )
 
         @self.reset_view_button.on_click
         def _(_):
             self.need_update = True
             for client in self.server.get_clients().values():
-                client.camera.up_direction = tf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
+                client.camera.up_direction = tf.SO3(client.camera.wxyz) @ np.array(
+                    [0.0, -1.0, 0.0]
+                )
 
         self.c2ws = []
         self.camera_infos = []
@@ -86,7 +111,7 @@ class ViserViewer:
                 self.need_update = True
 
         self.debug_idx = 0
-            
+
     def set_renderer(self, renderer):
         self.renderer = renderer
 
@@ -96,25 +121,50 @@ class ViserViewer:
             start = time.time()
             for client in self.server.get_clients().values():
                 camera = client.camera
-                camera_info = CameraInfo.from_fov_camera(camera.fov, camera.aspect, self.resolution_slider.value, self.near_plane_slider.value, self.far_plane_slider.value)
+                camera_info = CameraInfo.from_fov_camera(
+                    camera.fov,
+                    camera.aspect,
+                    self.resolution_slider.value,
+                    self.near_plane_slider.value,
+                    self.far_plane_slider.value,
+                )
                 c2w = torch.from_numpy(get_c2w(camera)).to(self.device)
-                out = (self.renderer(c2w, camera_info).detach().cpu().clamp(min=0.0, max=1.0).numpy() * 255.0).astype(np.uint8)
-                print("out max", out.max())
-                print("out min", out.min())
+                try:
+                    out = (
+                        self.renderer(c2w, camera_info)
+                        .detach()
+                        .cpu()
+                        .clamp(min=0.0, max=1.0)
+                        .numpy()
+                        * 255.0
+                    ).astype(np.uint8)
+                except RuntimeError as e:
+                    print(e)
+                    continue
                 client.set_background_image(out, format="jpeg")
                 self.debug_idx += 1
                 if self.debug_idx % 100 == 0:
-                    cv2.imwrite(f"./tmp/viewer/debug_{self.debug_idx}.png", cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(
+                        f"./tmp/viewer/debug_{self.debug_idx}.png",
+                        cv2.cvtColor(out, cv2.COLOR_RGB2BGR),
+                    )
 
             end = time.time()
-            print(f"Update time: {end - start:.3g}")
+            self.render_times.append(end - start)
+            self.fps.value = f"{1.0 / np.mean(self.render_times):.3g}"
+            # print(f"Update time: {end - start:.3g}")
 
     def from_viser_camera(self):
         self.c2ws = []
         self.camera_infos = []
         for client in self.server.get_clients().values():
             camera = client.camera
-            camera_info = CameraInfo.from_fov_camera(camera.fov, camera.aspect, self.resolution_slider.value, self.near_plane_slider.value, self.far_plane_slider.value)
+            camera_info = CameraInfo.from_fov_camera(
+                camera.fov,
+                camera.aspect,
+                self.resolution_slider.value,
+                self.near_plane_slider.value,
+                self.far_plane_slider.value,
+            )
             self.camera_infos.append(camera_info)
             self.c2ws.append(torch.from_numpy(get_c2w(camera)).to(self.device))
-

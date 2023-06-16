@@ -1,5 +1,5 @@
 TODOs:
 
-- [] adaptive control
-- [] train eval split and do complete evaluation
-- [] profiling
+- [ ] adaptive control
+- [ ] train eval split and do complete evaluation
+- [ ] profiling

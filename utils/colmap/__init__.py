@@ -137,11 +137,14 @@ def read_images_v1(filename, image_base_dir):
     # imgs = np.empty([N, H, W, 3], dtype=np.uint8)
     imgs = np.empty([N, H, W, 3], dtype=np.uint8)
 
+    filenames = []
+
     tic()
     for idx, img in tqdm(enumerate(images.values())):
         rot.append(img.qvec2rotmat())
         T.append(img.tvec)
         imgs[idx] = read_one_image(image_base_dir / img.name, conversion=False)
+        filenames.append(img.name)
     toc("in [read image v1] load")
 
     tic()
@@ -153,7 +156,7 @@ def read_images_v1(filename, image_base_dir):
     T = np.array(T)
     toc("list to np.ndarray")
 
-    return rot, T, imgs
+    return rot, T, imgs, filenames
 
 
 def read_images_test(filename, image_base_dir):

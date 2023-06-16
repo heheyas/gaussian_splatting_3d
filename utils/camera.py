@@ -243,7 +243,6 @@ class CameraInfo:
         self.cy *= scale
         self.w *= int(scale)
         self.h *= int(scale)
-        
 
     def get_frustum(self, c2w):
         up = -c2w[:, 1]
@@ -291,14 +290,14 @@ class CameraInfo:
             pts = pts[:, :2] / pts[:, 2:]
 
         assert pts.shape[1] == 2
-        
+
         pts[:, 0] = pts[:, 0] * self.fx + self.cx
         pts[:, 1] = pts[:, 1] * self.fy + self.cy
         if isinstance(pts, np.ndarray):
             pts = pts.astype(np.int32)
         elif isinstance(pts, torch.Tensor):
             pts = pts.to(torch.int32)
-    
+
         return pts
 
     @classmethod
@@ -309,9 +308,8 @@ class CameraInfo:
         cy = H / 2
         fx = cx / np.tan(fov / 2)
         fy = cy / np.tan(fov / 2)
-        
+
         return cls(fx, fy, cx, cy, W, H, near_plane, far_plane)
-        
 
 
 def in_frustum(queries, normal, pts):
@@ -421,7 +419,7 @@ def get_c2ws_and_camera_info_v1(cfg):
     console.print("[bold green]Loading images...")
 
     tic()
-    rot, t, images = read_images_v1(image_bin, cfg.image_dir)
+    rot, t, images, filenames = read_images_v1(image_bin, cfg.image_dir)
     toc("read images v1")
 
     console.print("[bold green]Loading points...")

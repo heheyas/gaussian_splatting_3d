@@ -40,7 +40,6 @@ def main(cfg):
             config=cfg,
             name=f"{cfg.data_name}_{timestamp}",
             sync_tensorboard=True,
-            # tensorboard=True,
         )
     writer = SummaryWriter(
         f"./logs/runs/{cfg.data_name}/{timestamp}", comment=cfg.comment

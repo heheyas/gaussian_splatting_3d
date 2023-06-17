@@ -1,0 +1,1 @@
+docker run --gpus all -it --rm -v $(pwd):/workspace -w /workspace nvcr.io/nvidia/pytorch:23.05-py3

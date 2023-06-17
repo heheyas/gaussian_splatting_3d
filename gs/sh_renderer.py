@@ -202,6 +202,7 @@ class SHRenderer(torch.nn.Module):
             print_info(end - start, "num_gaussians_per_tile")
 
         tic()
+        torch.cuda.profiler.cudart().cudaProfilerStart()
         out = render_sh(
             mean,
             cov,
@@ -222,6 +223,7 @@ class SHRenderer(torch.nn.Module):
             self.now_C,
             self.T_thresh,
         )
+        torch.cuda.profiler.cudart().cudaProfilerStop()
         toc("render sh")
 
         return out.view(H, W, 3)

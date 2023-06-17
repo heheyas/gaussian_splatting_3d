@@ -99,16 +99,17 @@ __device__ void vol_render_one_batch_sh(
                   topleft[1] + global_y * pixel_size_y};
 
   for (int i = 0; i < N_gaussians_this_time; ++i) {
-    if (cum_alpha < thresh) {
-      break;
-    }
+    // if (cum_alpha < thresh) {
+    //   break;
+    // }
     float alpha_ = fminf(alpha[i], 0.99f);
     float coeff = alpha_ * cum_alpha;
     float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
+    // float val = 1.0f;
     coeff *= val;
-    if (alpha_ * val < MIN_RENDER_ALPHA) {
-      continue;
-    }
+    // if (alpha_ * val < MIN_RENDER_ALPHA) {
+    //   continue;
+    // }
     // assert(alpha_ * val >= 0.0f && alpha_ * val <= 1.0f);
     // checkValue(coeff);
     // assert(coeff >= 0.0f && coeff <= 1.0f);
@@ -129,6 +130,7 @@ __device__ void vol_render_one_batch_sh(
     // checkValue(out[2]);
     // printf("out: %f %f %f\n", out[0], out[1], out[2]);
     cum_alpha *= (1 - alpha_ * val);
+    __syncwarp();
   }
 }
 

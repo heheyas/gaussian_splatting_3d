@@ -768,7 +768,7 @@ class _render_sh(torch.autograd.Function):
         ) = ctx.const
 
         tic()
-        _backend.tile_based_vol_rendering_backward_sh(
+        _backend.tile_based_vol_rendering_backward_sh_warp_reduce(
             mean,
             cov,
             sh_coeffs,

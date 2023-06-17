@@ -6,6 +6,9 @@
 #include "tile_ops.h"
 #include "vol_render.h"
 #include "vol_render_sh.h"
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <stdint.h>
 
 void culling_gaussian_bsphere(Tensor mean, Tensor qvec, Tensor svec,
@@ -497,6 +500,8 @@ void tile_based_vol_rendering_sh(Tensor mean, Tensor cov, Tensor sh_coeffs,
   uint32_t N = mean.size(0);
   uint32_t N_with_dub = gaussian_ids.size(0);
 
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
   switch (C) {
   case 1:
     tile_based_vol_rendering_sh_cuda<1>(
@@ -505,7 +510,7 @@ void tile_based_vol_rendering_sh(Tensor mean, Tensor cov, Tensor sh_coeffs,
         start.data_ptr<int>(), end.data_ptr<int>(),
         gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
         topleft.data_ptr<float>(), c2w.data_ptr<float>(), tile_size, n_tiles_h,
-        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh, stream);
     break;
   case 2:
     tile_based_vol_rendering_sh_cuda<2>(
@@ -514,7 +519,7 @@ void tile_based_vol_rendering_sh(Tensor mean, Tensor cov, Tensor sh_coeffs,
         start.data_ptr<int>(), end.data_ptr<int>(),
         gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
         topleft.data_ptr<float>(), c2w.data_ptr<float>(), tile_size, n_tiles_h,
-        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh, stream);
     break;
   case 3:
     tile_based_vol_rendering_sh_cuda<3>(
@@ -523,7 +528,7 @@ void tile_based_vol_rendering_sh(Tensor mean, Tensor cov, Tensor sh_coeffs,
         start.data_ptr<int>(), end.data_ptr<int>(),
         gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
         topleft.data_ptr<float>(), c2w.data_ptr<float>(), tile_size, n_tiles_h,
-        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh, stream);
     break;
   case 4:
     tile_based_vol_rendering_sh_cuda<4>(
@@ -532,7 +537,7 @@ void tile_based_vol_rendering_sh(Tensor mean, Tensor cov, Tensor sh_coeffs,
         start.data_ptr<int>(), end.data_ptr<int>(),
         gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
         topleft.data_ptr<float>(), c2w.data_ptr<float>(), tile_size, n_tiles_h,
-        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh);
+        n_tiles_w, pixel_size_x, pixel_size_y, H, W, thresh, stream);
     break;
   }
 }
@@ -562,6 +567,9 @@ void tile_based_vol_rendering_backward_sh(
   uint32_t N = mean.size(0);
   uint32_t N_with_dub = gaussian_ids.size(0);
   //   printf("tile_based_vol_rendering_backward\n");
+
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
   switch (C) {
   case 1:
     tile_based_vol_rendering_backward_sh_cuda<1>(
@@ -573,7 +581,7 @@ void tile_based_vol_rendering_backward_sh(
         grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
         grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
         c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
-        pixel_size_y, H, W, thresh);
+        pixel_size_y, H, W, thresh, stream);
     break;
   case 2:
     tile_based_vol_rendering_backward_sh_cuda<2>(
@@ -585,7 +593,7 @@ void tile_based_vol_rendering_backward_sh(
         grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
         grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
         c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
-        pixel_size_y, H, W, thresh);
+        pixel_size_y, H, W, thresh, stream);
     break;
   case 3:
     tile_based_vol_rendering_backward_sh_cuda<3>(
@@ -597,7 +605,7 @@ void tile_based_vol_rendering_backward_sh(
         grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
         grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
         c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
-        pixel_size_y, H, W, thresh);
+        pixel_size_y, H, W, thresh, stream);
     break;
   case 4:
     tile_based_vol_rendering_backward_sh_cuda<4>(
@@ -609,7 +617,7 @@ void tile_based_vol_rendering_backward_sh(
         grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
         grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
         c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
-        pixel_size_y, H, W, thresh);
+        pixel_size_y, H, W, thresh, stream);
     break;
   }
 }
@@ -678,6 +686,83 @@ void tile_based_vol_rendering_backward_sh_v1(
     break;
   case 4:
     tile_based_vol_rendering_backward_sh_cuda_v1<4>(
+        N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+        sh_coeffs.data_ptr<float>(), alpha.data_ptr<float>(),
+        start.data_ptr<int>(), end.data_ptr<int>(),
+        gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+        grad_mean.data_ptr<float>(), grad_cov.data_ptr<float>(),
+        grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
+        grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
+        c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+        pixel_size_y, H, W, thresh);
+    break;
+  }
+}
+
+void tile_based_vol_rendering_backward_sh_warp_reduce(
+    Tensor mean, Tensor cov, Tensor sh_coeffs, Tensor alpha, Tensor start,
+    Tensor end, Tensor gaussian_ids, Tensor out, Tensor grad_mean,
+    Tensor grad_cov, Tensor grad_sh_coeffs, Tensor grad_alpha, Tensor grad_out,
+    Tensor topleft, Tensor c2w, uint32_t tile_size, uint32_t n_tiles_h,
+    uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H,
+    uint32_t W, uint32_t C, float thresh) {
+  CHECK_DC_FLOAT(mean);
+  CHECK_DC_FLOAT(cov);
+  CHECK_DC_FLOAT(sh_coeffs);
+  CHECK_DC_FLOAT(alpha);
+  CHECK_DC_INT(start);
+  CHECK_DC_INT(end);
+  CHECK_DC_FLOAT(grad_mean);
+  CHECK_DC_FLOAT(grad_cov);
+  CHECK_DC_FLOAT(grad_sh_coeffs);
+  CHECK_DC_FLOAT(grad_alpha);
+  CHECK_DC_INT(gaussian_ids);
+  CHECK_DC_FLOAT(out);
+  CHECK_DC_FLOAT(grad_out);
+  CHECK_DC_FLOAT(topleft);
+  CHECK_DC_FLOAT(c2w);
+  uint32_t N = mean.size(0);
+  uint32_t N_with_dub = gaussian_ids.size(0);
+  //   printf("tile_based_vol_rendering_backward\n");
+  switch (C) {
+  case 1:
+    tile_based_vol_rendering_backward_sh_cuda_warp_reduce<1>(
+        N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+        sh_coeffs.data_ptr<float>(), alpha.data_ptr<float>(),
+        start.data_ptr<int>(), end.data_ptr<int>(),
+        gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+        grad_mean.data_ptr<float>(), grad_cov.data_ptr<float>(),
+        grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
+        grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
+        c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+        pixel_size_y, H, W, thresh);
+    break;
+  case 2:
+    tile_based_vol_rendering_backward_sh_cuda_warp_reduce<2>(
+        N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+        sh_coeffs.data_ptr<float>(), alpha.data_ptr<float>(),
+        start.data_ptr<int>(), end.data_ptr<int>(),
+        gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+        grad_mean.data_ptr<float>(), grad_cov.data_ptr<float>(),
+        grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
+        grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
+        c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+        pixel_size_y, H, W, thresh);
+    break;
+  case 3:
+    tile_based_vol_rendering_backward_sh_cuda_warp_reduce<3>(
+        N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
+        sh_coeffs.data_ptr<float>(), alpha.data_ptr<float>(),
+        start.data_ptr<int>(), end.data_ptr<int>(),
+        gaussian_ids.data_ptr<int>(), out.data_ptr<float>(),
+        grad_mean.data_ptr<float>(), grad_cov.data_ptr<float>(),
+        grad_sh_coeffs.data_ptr<float>(), grad_alpha.data_ptr<float>(),
+        grad_out.data_ptr<float>(), topleft.data_ptr<float>(),
+        c2w.data_ptr<float>(), tile_size, n_tiles_h, n_tiles_w, pixel_size_x,
+        pixel_size_y, H, W, thresh);
+    break;
+  case 4:
+    tile_based_vol_rendering_backward_sh_cuda_warp_reduce<4>(
         N, N_with_dub, mean.data_ptr<float>(), cov.data_ptr<float>(),
         sh_coeffs.data_ptr<float>(), alpha.data_ptr<float>(),
         start.data_ptr<int>(), end.data_ptr<int>(),

@@ -51,4 +51,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Tile based volume rendering "
         "backward with spherical "
         "harmonics, the gaussian_ids are store in scratchpad memory");
+  m.def("tile_based_vol_rendering_backward_sh_warp_reduce",
+        &tile_based_vol_rendering_backward_sh_warp_reduce,
+        "backward while using warp reduce");
 }

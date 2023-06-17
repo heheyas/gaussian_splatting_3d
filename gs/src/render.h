@@ -107,3 +107,11 @@ void tile_based_vol_rendering_backward_sh_v1(
     Tensor topleft, Tensor c2w, uint32_t tile_size, uint32_t n_tiles_h,
     uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H,
     uint32_t W, uint32_t C, float thresh);
+
+void tile_based_vol_rendering_backward_sh_warp_reduce(
+    Tensor mean, Tensor cov, Tensor sh_coeffs, Tensor alpha, Tensor start,
+    Tensor end, Tensor gaussian_ids, Tensor out, Tensor grad_mean,
+    Tensor grad_cov, Tensor grad_sh_coeffs, Tensor grad_alpha, Tensor grad_out,
+    Tensor topleft, Tensor c2w, uint32_t tile_size, uint32_t n_tiles_h,
+    uint32_t n_tiles_w, float pixel_size_x, float pixel_size_y, uint32_t H,
+    uint32_t W, uint32_t C, float thresh);

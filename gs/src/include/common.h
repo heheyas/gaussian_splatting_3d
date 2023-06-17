@@ -10,6 +10,7 @@
 // #endif
 
 #include <assert.h>
+#include <cooperative_groups.h>
 #include <cstdlib>
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -77,6 +78,7 @@
   }
 
 using torch::Tensor;
+// namespace cg = cooperative_groups;
 
 const float EPS = 1e-6;
 const float MIN_RADIAL = -85.0f;
@@ -119,5 +121,7 @@ struct GpuTimer {
     }
   }
 };
+
+#define FULL_MASK 0xffffffff
 
 #endif

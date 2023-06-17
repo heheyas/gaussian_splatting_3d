@@ -15,6 +15,8 @@ nvcc_flags = [
     "-U__CUDA_NO_HALF_OPERATORS__",
     "-U__CUDA_NO_HALF_CONVERSIONS__",
     "-U__CUDA_NO_HALF2_OPERATORS__",
+    "-arch",
+    "compute_86",
 ]
 
 cub_home = os.environ.get("CUB_HOME", None)

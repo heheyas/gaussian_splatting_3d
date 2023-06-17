@@ -3,7 +3,9 @@ debug: False
 timing: False
 
 # system
+mode: train_only
 device: cuda:0
+eval_iteration: 500
 
 # data
 data_name: garden

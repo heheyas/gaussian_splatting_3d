@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import numpy as np
 import torch
@@ -409,6 +410,23 @@ def get_c2ws_and_camera_info(cfg):
     return c2ws, camera_info, images, pts, rgb
 
 
+def get_eval_mask(data_dir, filenames):
+    data_dir = Path(data_dir)
+    test_meta = data_dir / "transforms_test.json"
+    with open(test_meta, "r") as f:
+        test_meta = json.load(f)
+
+    eval_filenames = []
+
+    for ff in test_meta["frames"]:
+        fpath = Path(ff["file_path"])
+        eval_filenames.append(fpath.name)
+
+    eval_mask = np.isin(filenames, eval_filenames)
+
+    return torch.from_numpy(eval_mask)
+
+
 def get_c2ws_and_camera_info_v1(cfg):
     console.print("[bold green]Loading camera info...")
     base = Path(cfg.data_dir)
@@ -418,9 +436,16 @@ def get_c2ws_and_camera_info_v1(cfg):
     points_cached = base / "colmap" / "sparse" / "0" / "points_and_rgb.pt"
     console.print("[bold green]Loading images...")
 
+    image_dirname = "images"
+
+    if cfg.downsample > 1:
+        image_dirname += f"_{cfg.downsample}"
+
     tic()
-    rot, t, images, filenames = read_images_v1(image_bin, cfg.image_dir)
+    rot, t, images, filenames = read_images_v1(image_bin, base / image_dirname)
     toc("read images v1")
+
+    eval_mask = get_eval_mask(base, filenames)
 
     console.print("[bold green]Loading points...")
     if points_cached.exists():
@@ -495,4 +520,4 @@ def get_c2ws_and_camera_info_v1(cfg):
         rgb = torch.from_numpy(rgb)
     c2ws = c2ws.to(cfg.device)
 
-    return c2ws, camera_info, images, pts, rgb
+    return c2ws, camera_info, images, pts, rgb, eval_mask

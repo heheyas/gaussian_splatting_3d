@@ -1,3 +1,4 @@
+from typing import Any
 import numpy as np
 import torch
 import kornia
@@ -7,22 +8,29 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 
 class Metrics:
-    def __init__(self) -> None:
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+    def __init__(self, device="cuda") -> None:
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
         self.ssim = structural_similarity_index_measure
-        self.lpips = LearnedPerceptualImagePatchSimilarity()
-        
+        self.lpips = LearnedPerceptualImagePatchSimilarity().to(device)
+
     def evaluate(self, pred, gt):
-        pred = pred.clamp(min=0.0, max=1.0)
-        gt = gt.clamp(min=0.0, max=1.0)
+        pred = pred.clamp(min=0.0, max=1.0).moveaxis(-1, 0)
+        gt = gt.clamp(min=0.0, max=1.0).moveaxis(-1, 0)
         psnr = self.psnr(pred, gt)
-        ssim = self.ssim(pred, gt, data_range=1.0)
+        ssim = self.ssim(
+            pred.unsqueeze(0),
+            gt.unsqueeze(0),
+            data_range=1.0,
+        )
         lpips = self.lpips(pred, gt)
-        
+
         metrics = {
             "psnr": psnr,
             "ssim": ssim,
             "lpips": lpips,
         }
-        
+
         return metrics
+
+    def __call__(self, pred, gt):
+        return self.evaluate(pred, gt)

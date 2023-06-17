@@ -134,3 +134,10 @@ def lineprofiler(func):
     except NameError:
         pass
     return func
+
+
+def average_dicts(dicts):
+    avg_dict = {}
+    for k in dicts[0].keys():
+        avg_dict[k] = np.mean([d[k] for d in dicts])
+    return avg_dict

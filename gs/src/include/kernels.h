@@ -170,6 +170,29 @@ __device__ bool intersect_sphere_frustum(float3 &query, float radius,
 }
 
 __host__ __device__ __forceinline__ float
+kernel_gaussian_2d_float(float *mean, float *cov, float *query) {
+  float c0 = cov[0];
+  float c1 = cov[1];
+  float c2 = cov[2];
+  float c3 = cov[3];
+  float det = c0 * c3 - c1 * c2;
+  float x = query[0] - mean[0];
+  float y = query[1] - mean[1];
+  float tmpx = x * c3 - y * c2;
+  float tmpy = -x * c1 + y * c0;
+  float radial = tmpx * x + tmpy * y;
+  radial /= det;
+  if (radial < 0.0) {
+    radial = 1000.0;
+  }
+  float val = (float)expf(-0.5 * radial);
+  // checkValue(val);
+  // assert(val <= 1.0f && val >= 0.0f);
+
+  return val;
+}
+
+__host__ __device__ __forceinline__ float
 kernel_gaussian_2d(float *mean, float *cov, float *query) {
   double c0 = (double)cov[0];
   double c1 = (double)cov[1];
@@ -342,6 +365,33 @@ __device__ bool intersect_tile_gaussian2d_bcircle(float2 &topleft,
 // }
 
 __device__ inline void
+kernel_gaussian_2d_backward_float(float *mean, float *cov, float *query,
+                                  float *grad_mean, float *grad_cov,
+                                  float grad) {
+  // nan
+  float d_grad = grad;
+  float c0 = cov[0];
+  float c1 = cov[1];
+  float c2 = cov[2];
+  float c3 = cov[3];
+  float det = c0 * c3 - c1 * c2;
+  float x = query[0] - mean[0];
+  float y = query[1] - mean[1];
+  float tmpx = (x * c3 - y * c2) / det;
+  float tmpy = (-x * c1 + y * c0) / det;
+  // note: val has been multiplied in the grad
+  // atomic ops here
+  // checkValue((float)(d_grad * tmpx));
+  // checkValue((float)(d_grad * tmpy * tmpy));
+  atomicAdd(grad_mean, (float)(d_grad * tmpx));
+  atomicAdd(grad_mean + 1, (float)(d_grad * tmpy));
+  atomicAdd(grad_cov, 0.5 * (float)(d_grad * tmpx * tmpx));
+  atomicAdd(grad_cov + 1, 0.5 * (float)(d_grad * tmpx * tmpy));
+  atomicAdd(grad_cov + 2, 0.5 * (float)(d_grad * tmpy * tmpx));
+  atomicAdd(grad_cov + 3, 0.5 * (float)(d_grad * tmpy * tmpy));
+}
+
+__device__ inline void
 kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
                             float *grad_mean, float *grad_cov, float grad) {
   // nan
@@ -357,8 +407,8 @@ kernel_gaussian_2d_backward(float *mean, float *cov, float *query,
   double tmpy = (-x * c1 + y * c0) / det;
   // note: val has been multiplied in the grad
   // atomic ops here
-  checkValue((float)(d_grad * tmpx));
-  checkValue((float)(d_grad * tmpy * tmpy));
+  // checkValue((float)(d_grad * tmpx));
+  // checkValue((float)(d_grad * tmpy * tmpy));
   atomicAdd(grad_mean, (float)(d_grad * tmpx));
   atomicAdd(grad_mean + 1, (float)(d_grad * tmpy));
   atomicAdd(grad_cov, 0.5 * (float)(d_grad * tmpx * tmpx));

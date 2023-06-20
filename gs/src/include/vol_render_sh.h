@@ -8,10 +8,10 @@
 #include <device_launch_parameters.h>
 #include <stdint.h>
 
-__device__ __forceinline__ float warpSum(float val) {
+__device__ __forceinline__ float warpSum(float val, unsigned int mask) {
 #pragma unroll
   for (int i = 1; i < 32; i *= 2)
-    val += __shfl_xor_sync(-1, val, i);
+    val += __shfl_xor_sync(mask, val, i);
   return val;
 }
 
@@ -82,6 +82,18 @@ __device__ __forceinline__ void carry(uint32_t N, uint32_t dsize, float *sm,
   }
 }
 
+template <uint32_t D>
+__device__ __forceinline__ void carry_items(uint32_t N, float *sm, float *gm,
+                                            int *gaussian_ids) {
+  for (uint32_t i = 0; i < N; ++i) {
+#pragma unroll
+    for (uint32_t d = 0; d < D; ++d) {
+      sm[i * D + d] = gm[gaussian_ids[i] * D + d];
+    }
+  }
+  return;
+}
+
 template <uint32_t C>
 __device__ void vol_render_one_batch_sh(
     uint32_t N_gaussians_this_time, float *mean, float *cov, float *sh_coeffs,
@@ -111,11 +123,15 @@ __device__ void vol_render_one_batch_sh(
     }
     float alpha_ = fminf(alpha[i], 0.99f);
     float coeff = alpha_ * cum_alpha;
-    float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
+    // float val = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos);
+    float val = kernel_gaussian_2d_float(mean + 2 * i, cov + 4 * i, pos);
     // float val = 1.0f;
     coeff *= val;
     if (alpha_ * val < MIN_RENDER_ALPHA) {
       continue;
+    }
+    if (isnan(coeff)) {
+      coeff = 0.0f;
     }
     // assert(alpha_ * val >= 0.0f && alpha_ * val <= 1.0f);
     // checkValue(coeff);
@@ -129,6 +145,18 @@ __device__ void vol_render_one_batch_sh(
     // assert(coeff * y0 >= 0.0f && coeff * y0 <= 1.0f);
     // assert(coeff * y1 >= 0.0f && coeff * y1 <= 1.0f);
     // assert(coeff * y2 >= 0.0f && coeff * y2 <= 1.0f);
+    // if (isnan(coeff * y0) || isnan(coeff * y1) || isnan(coeff * y2)) {
+    //   continue;
+    // }
+    if (isnan(y0 * coeff)) {
+      y0 = 0.0f;
+    }
+    if (isnan(y1 * coeff)) {
+      y1 = 0.0f;
+    }
+    if (isnan(y2 * coeff)) {
+      y2 = 0.0f;
+    }
     out[0] += coeff * y0;
     out[1] += coeff * y1;
     out[2] += coeff * y2;
@@ -269,16 +297,31 @@ __device__ void vol_render_one_batch_sh_backward(
       break;
     }
     float alpha_ = fminf(alpha[i], 0.99f);
-    float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
+    float G = kernel_gaussian_2d_float(mean + 2 * i, cov + 4 * i, pos); // a * G
     // assert(G >= 0.0f && G <= 1.0f);
     if (alpha_ * G < MIN_RENDER_ALPHA) {
       continue;
     }
     float coeff = alpha_ * cum_alpha * G; // a * T * G
+    if (isnan(coeff)) {
+      coeff = 0.0f;
+    }
     // checkValue(coeff);
     float y0 = SIGMOID(sum_C<C>(sh_coeffs + 3 * i * CC, sh_consts));
     float y1 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 1) * CC, sh_consts));
     float y2 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 2) * CC, sh_consts));
+    // if (isnan(coeff * y0) || isnan(coeff * y1) || isnan(coeff * y2)) {
+    //   continue;
+    // }
+    if (isnan(y0 * coeff)) {
+      y0 = 0.0f;
+    }
+    if (isnan(y1 * coeff)) {
+      y1 = 0.0f;
+    }
+    if (isnan(y2 * coeff)) {
+      y2 = 0.0f;
+    }
     out[0] += coeff * y0;
     out[1] += coeff * y1;
     out[2] += coeff * y2;
@@ -289,7 +332,8 @@ __device__ void vol_render_one_batch_sh_backward(
     backward_C<C>(grad_sh_coeffs + (3 * i + 2) * CC, sh_consts,
                   coeff * SIGMOID_DSIGMOID(y2) * grad_out[2]);
 
-    double partial_aG = 0.0;
+    // double partial_aG = 0.0;
+    float partial_aG = 0.0f;
     partial_aG +=
         grad_out[0] * (y0 * cum_alpha - (final[0] - out[0]) / (1 - alpha_ * G));
     partial_aG +=
@@ -654,31 +698,34 @@ __device__ void vol_render_one_batch_sh_backward_warp_reduce(
     // grad_sh_coeffs += 3 * C * C;
     // float test_local_grad_alpha = warpSum(local_grad_alpha);
     // printf("shit\n");
-    //     local_grad_mean[0] = warpSum(local_grad_mean[0]);
-    //     local_grad_mean[1] = warpSum(local_grad_mean[1]);
-    //     local_grad_cov[0] = warpSum(local_grad_cov[0]);
-    //     local_grad_cov[1] = warpSum(local_grad_cov[1]);
-    //     local_grad_cov[2] = warpSum(local_grad_cov[2]);
-    //     local_grad_cov[3] = warpSum(local_grad_cov[3]);
+    unsigned int mask = __activemask();
+    unsigned int leader_id = __ffs(mask) - 1;
+    local_grad_mean[0] = warpSum(local_grad_mean[0], mask);
+    local_grad_mean[1] = warpSum(local_grad_mean[1], mask);
+    local_grad_cov[0] = warpSum(local_grad_cov[0], mask);
+    local_grad_cov[1] = warpSum(local_grad_cov[1], mask);
+    local_grad_cov[2] = warpSum(local_grad_cov[2], mask);
+    local_grad_cov[3] = warpSum(local_grad_cov[3], mask);
+#pragma unroll
+    for (int i = 0; i < 3 * C * C; ++i) {
+      local_grad_sh_coeffs[i] = warpSum(local_grad_sh_coeffs[i], mask);
+    }
+    //     if (local_id % 32 == leader_id) {
+    //       // perform once inside a warp
+    //       atomicAdd(grad_alpha + i, local_grad_alpha);
+    //       atomicAdd(grad_mean + 2 * i, local_grad_mean[0]);
+    //       atomicAdd(grad_mean + 2 * i + 1, local_grad_mean[1]);
+    //       atomicAdd(grad_cov + 4 * i, local_grad_cov[0]);
+    //       atomicAdd(grad_cov + 4 * i + 1, local_grad_cov[1]);
+    //       atomicAdd(grad_cov + 4 * i + 2, local_grad_cov[2]);
+    //       atomicAdd(grad_cov + 4 * i + 3, local_grad_cov[3]);
     // #pragma unroll
-    //     for (int i = 0; i < 3 * C * C; ++i) {
-    //       local_grad_sh_coeffs[i] = warpSum(local_grad_sh_coeffs[i]);
-    //     }
-    // if (local_id % 32 == 0) {
-    // perform once inside a warp
-    //     atomicAdd(grad_alpha + i, local_grad_alpha);
-    //     atomicAdd(grad_mean + 2 * i, local_grad_mean[0]);
-    //     atomicAdd(grad_mean + 2 * i + 1, local_grad_mean[1]);
-    //     atomicAdd(grad_cov + 4 * i, local_grad_cov[0]);
-    //     atomicAdd(grad_cov + 4 * i + 1, local_grad_cov[1]);
-    //     atomicAdd(grad_cov + 4 * i + 2, local_grad_cov[2]);
-    //     atomicAdd(grad_cov + 4 * i + 3, local_grad_cov[3]);
-    // #pragma unroll
-    //     for (int i = 0; i < 3 * C * C; ++i) {
-    //       atomicAdd(grad_sh_coeffs + i, local_grad_sh_coeffs[i]);
+    //       for (int j = 0; j < 3 * C * C; ++j) {
+    //         atomicAdd(grad_sh_coeffs + 3 * C * C * i + j,
+    //         local_grad_sh_coeffs[j]);
+    //       }
     //     }
   }
-  // }
 }
 
 template <uint32_t C>

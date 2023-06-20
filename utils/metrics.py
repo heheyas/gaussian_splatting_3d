@@ -14,20 +14,20 @@ class Metrics:
         self.lpips = LearnedPerceptualImagePatchSimilarity().to(device)
 
     def evaluate(self, pred, gt):
-        pred = pred.clamp(min=0.0, max=1.0).moveaxis(-1, 0)
-        gt = gt.clamp(min=0.0, max=1.0).moveaxis(-1, 0)
+        pred = pred.clamp(min=0.0, max=1.0).moveaxis(-1, 0).unsqueeze(0)
+        gt = gt.clamp(min=0.0, max=1.0).moveaxis(-1, 0).unsqueeze(0)
         psnr = self.psnr(pred, gt)
         ssim = self.ssim(
-            pred.unsqueeze(0),
-            gt.unsqueeze(0),
+            pred,
+            gt,
             data_range=1.0,
         )
         lpips = self.lpips(pred, gt)
 
         metrics = {
-            "psnr": psnr,
-            "ssim": ssim,
-            "lpips": lpips,
+            "psnr": psnr.item(),
+            "ssim": ssim.item(),
+            "lpips": lpips.item(),
         }
 
         return metrics

@@ -15,6 +15,7 @@ if __name__ == "__main__":
     opt = parser.parse_args()
 
     renderer = SHRenderer.load(opt.saved_model)
+    renderer.eval()
 
     viewer_conf = {
         "viewer_port": opt.port,

@@ -3,7 +3,7 @@ debug: False
 timing: False
 
 # system
-mode: train_only
+mode: train_and_eval
 device: cuda:0
 eval_iteration: 50
 
@@ -56,9 +56,11 @@ alpha_reset_val: 0.1
 alpha_thresh: 0.05
 split_scale_thresh: 0.02
 cum_grad: False
+split_type: mean_grad
+svec_thresh: 50
 
 # wandb
-wandb: True
+wandb: False
 
 # viewer config
 viewer: False
@@ -78,7 +80,7 @@ alpha_lr: 1e-2
 comment: ""
 
 # from checkpoint
-from_ckpt: False
-ckpt_path: a/b/c
-start_epoch: 0
+from_ckpt: True
+ckpt_path: ./saved/2023-06-18_13:33:56_fern_sh/model_1000.pt
+start_epoch: 500
 vis_grad_thresh: 0.0002

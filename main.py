@@ -76,6 +76,8 @@ def main(cfg):
     only_forward = cfg.get("only_forward", False)
     warm_up = cfg.get("warm_up", 1000)
 
+    renderer.train()
+
     with tqdm(total=cfg.max_iteration) as pbar:
         for e in range(cfg.max_iteration):
             i = e % N_images

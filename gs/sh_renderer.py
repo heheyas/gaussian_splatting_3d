@@ -1,3 +1,4 @@
+import gc
 from typing import Any
 import cv2
 from pathlib import Path
@@ -65,18 +66,11 @@ class SHRenderer(torch.nn.Module):
 
         self.now_C = 1
 
-        self.cum_grad = cfg.get("cum_grad", False)
-        if self.cum_grad:
-            self.register_buffer("max_grad_mean", torch.zeros_like(self.mean[..., 0]))
-            # self.register_buffer("max_grad_qvec", torch.zeros_like(self.qvec))
-            # self.register_buffer(
-            #     "max_grad_svec", torch.zeros_like(self.svec_before_activation)
-            # )
-            # self.register_buffer(
-            #     "max_grad_alpha", torch.zeros_like(self.alpha_before_activation)
-            # )
-            # self.register_buffer("max_grad_sh_coeffs", torch.zeros_like(self.sh_coeffs))
-
+        if hasattr(self, "mean"):
+            self.register_buffer("grad_mean", torch.zeros_like(self.mean[..., 0]))
+            self.register_buffer(
+                "cnt", torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
+            )
         self.set_cfg(cfg)
 
     def initialize(self, cfg, pts, rgb):
@@ -127,11 +121,15 @@ class SHRenderer(torch.nn.Module):
         self.scale_shrink_factor = cfg.scale_shrink_factor
         # !! deprecated
         self.alpha_reset_period = cfg.alpha_reset_period
+        self.remove_low_alpha_period = cfg.remove_low_alpha_period
         self.alpha_reset_val = cfg.alpha_reset_val
         self.alpha_thresh = cfg.alpha_thresh
 
         self.remove_tiny_period = cfg.get("remove_tiny_period", 500)
         self.remove_tiny = cfg.get("remove_tiny", False)
+        self.split_type = cfg.get("split_type", "mean_grad")
+        self.split_reduction = cfg.get("split_reduction", "max")
+        self.svec_thresh = cfg.get("svec_thresh", 50)
 
         # SH
         self.sh_upgrades = cfg.sh_upgrades
@@ -156,6 +154,14 @@ class SHRenderer(torch.nn.Module):
         alpha = self.alpha[mask].contiguous()
 
         mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+
+        if hasattr(self, "cnt"):
+            self.cnt[mask] += 1
+
+        if self.split_type == "2d_mean_grad" and self.training:
+            self.frustum_culling_mask = mask
+            self.mean_2d = mean
+            self.mean_2d.retain_grad()
 
         self.depth = depth
         self.radius = None
@@ -202,7 +208,7 @@ class SHRenderer(torch.nn.Module):
             print_info(end - start, "num_gaussians_per_tile")
 
         tic()
-        torch.cuda.profiler.cudart().cudaProfilerStart()
+        # torch.cuda.profiler.cudart().cudaProfilerStart()
         out = render_sh(
             mean,
             cov,
@@ -223,7 +229,7 @@ class SHRenderer(torch.nn.Module):
             self.now_C,
             self.T_thresh,
         )
-        torch.cuda.profiler.cudart().cudaProfilerStop()
+        # torch.cuda.profiler.cudart().cudaProfilerStop()
         toc("render sh")
 
         return out.view(H, W, 3)
@@ -243,6 +249,7 @@ class SHRenderer(torch.nn.Module):
         self.log_info(writer, step)
         self.log_grad_bounds(writer, step)
         self.log_n_gaussian_dub(writer, step)
+        self.log_statistics(writer, step)
 
     @torch.no_grad()
     def log_depth_and_radius(self, writer, step):
@@ -325,6 +332,9 @@ class SHRenderer(torch.nn.Module):
     def log_n_gaussian_dub(self, writer, step):
         writer.add_scalar("n_gaussian_dub", self.total_dub_gaussians, step)
 
+    def split_gaussians_by_radius(self):
+        pass
+
     def split_gaussians(self):
         assert (
             self.mean.grad is not None
@@ -332,15 +342,30 @@ class SHRenderer(torch.nn.Module):
         console.print("[red bold]Splitting Gaussians")
 
         # all the gaussians need split or clone
-        if self.cum_grad:
-            mean_mask = self.max_grad_mean > self.pos_grad_thresh
+        if self.split_type == "mean_grad":
+            if self.split_reduction == "mean":
+                mask = self.grad_mean / (self.cnt + 1e-5) > self.pos_grad_thresh
+            elif self.split_reduction == "max":
+                mask = self.grad_mean > self.pos_grad_thresh
+            else:
+                raise NotImplementedError
+        elif self.split_type == "2d_mean_grad":
+            if self.split_reduction == "mean":
+                mask = self.grad_mean / (self.cnt + 1e-5) > self.pos_grad_thresh
+            elif self.split_reduction == "max":
+                mask = self.grad_mean > self.pos_grad_thresh
+            else:
+                raise NotImplementedError
         else:
-            mean_mask = self.mean.grad.norm(dim=-1) > self.pos_grad_thresh
+            raise NotImplementedError
+
         svec_mask = (self.svec.data > self.split_scale_thresh).any(dim=-1)
         # gaussians need split are with large spatial scale
-        split_mask = torch.logical_and(mean_mask, svec_mask)
+        split_mask = torch.logical_and(mask, svec_mask)
         # gaussians need clone are with small spatial scale
-        clone_mask = torch.logical_and(mean_mask, torch.logical_not(split_mask))
+        clone_mask = torch.logical_and(mask, torch.logical_not(split_mask))
+
+        del mask, svec_mask
 
         num_split = split_mask.sum().item()
         num_clone = clone_mask.sum().item()
@@ -422,8 +447,9 @@ class SHRenderer(torch.nn.Module):
         self.sh_coeffs = torch.nn.Parameter(new_sh_coeffs)
         self.alpha_before_activation = torch.nn.Parameter(new_alpha)
 
-        if self.cum_grad:
-            self.max_grad_mean = torch.zeros_like(self.mean[..., 0])
+        del new_mean, new_qvec, new_svec, new_sh_coeffs, new_alpha
+        del split_alpha_ba, split_mean, split_qvec, split_svec, split_sh_coeffs
+        gc.collect()
 
     def remove_low_alpha_gaussians(self):
         mask = self.alpha_act(self.alpha_before_activation.data) >= self.alpha_thresh
@@ -443,6 +469,25 @@ class SHRenderer(torch.nn.Module):
         console.print(
             f"[yellow]removed {removed} gaussians, remaining {self.N} gaussians"
         )
+
+    @torch.no_grad()
+    def remove_large_gaussians(self):
+        # mask for world-space gaussians
+        world_space_mask = (self.svec > self.world_large_thresh).all(dim=-1)
+        num_world_space_large = world_space_mask.sum().item()
+        console.print(
+            f"[yellow]num_world_space_large: {num_world_space_large}[/yellow]"
+        )
+        # TODO: remove large gaussians in view space
+        # mask for view-space gaussians
+        # view_space_mask = (self.radius_2d > self.view_large_thresh).all(dim=-1)
+        # num_view_space_large = view_space_mask.sum().item()
+        # console.print(f"[yellow]num_view_space_large: {num_view_space_large}[/yellow]")
+        # # view_space_mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+
+        # mask = torch.logical_or(world_space_mask, view_space_mask)
+
+        self.select_masked_gaussians(world_space_mask)
 
     def reset_alpha(self):
         console.print("[yellow]reset alpha[/yellow]")
@@ -466,12 +511,30 @@ class SHRenderer(torch.nn.Module):
             self.svec_before_activation.data[mask]
         )
 
-    def update_max_grads(self):
-        self.max_grad_mean = torch.maximum(
-            self.max_grad_mean, self.mean.grad.norm(dim=-1)
-        )
+    def update_grads(self):
+        if self.split_type == "mean_grad":
+            if self.split_reduction == "max":
+                self.grad_mean = torch.maximum(
+                    self.grad_mean, self.mean.grad.norm(dim=-1)
+                )
+            elif self.split_reduction == "mean":
+                self.grad_mean += self.mean.grad.norm(dim=-1)
+            else:
+                raise NotImplementedError
+        elif self.split_type == "2d_mean_grad":
+            if self.split_reduction == "max":
+                self.grad_mean[self.frustum_culling_mask] = torch.maximum(
+                    self.grad_mean[self.frustum_culling_mask],
+                    self.mean_2d.grad.norm(dim=-1),
+                )
+            elif self.split_reduction == "mean":
+                self.grad_mean[self.frustum_culling_mask] += self.mean_2d.grad.norm(
+                    dim=-1
+                )
+            else:
+                raise NotImplementedError
 
-    def adaptive_control(self, epoch):
+    def adaptive_control(self, epoch, force=False):
         if epoch < self.warm_up:
             return
 
@@ -479,17 +542,23 @@ class SHRenderer(torch.nn.Module):
             self.now_C += 1
             self.now_C = min(self.now_C, self.max_C)
 
-        self.update_max_grads()
+        self.update_grads()
 
-        if step_check(epoch, self.adaptive_control_iteration):
+        if step_check(epoch, self.adaptive_control_iteration) or force:
             self.split_gaussians()
 
-        if step_check(epoch, self.alpha_reset_period):
+        if step_check(epoch, self.remove_low_alpha_period) or force:
             self.remove_low_alpha_gaussians()
+
+        if step_check(epoch, self.alpha_reset_period) or force:
             self.reset_alpha()
 
-        if self.remove_tiny and step_check(epoch, self.remove_tiny_period):
-            self.remove_tiny_gaussians()
+        # if self.remove_tiny and step_check(epoch, self.remove_tiny_period):
+        #     self.remove_tiny_gaussians()
+        self.grad_mean = torch.zeros_like(self.mean[..., 0])
+        self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def save(self, path):
         path = Path(path)
@@ -509,10 +578,17 @@ class SHRenderer(torch.nn.Module):
         torch.save(state_dict, path)
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, cfg=None):
         state_dict = torch.load(path)
 
-        renderer = cls(state_dict["cfg"])
+        saved_cfg = state_dict["cfg"]
+        if cfg is not None:
+            try:
+                # saved_cfg.update(cfg)
+                saved_cfg = cfg
+            except:
+                pass
+        renderer = cls(saved_cfg)
         renderer.N = state_dict["N"]
         renderer.mean = torch.nn.Parameter(state_dict["mean"])
         renderer.qvec = torch.nn.Parameter(state_dict["qvec"])
@@ -523,6 +599,9 @@ class SHRenderer(torch.nn.Module):
         renderer.alpha_before_activation = torch.nn.Parameter(
             state_dict["alpha_before_activation"]
         )
+
+        renderer.grad_mean = torch.zeros_like(renderer.mean[..., 0])
+        renderer.cnt = torch.zeros_like(renderer.mean[..., 0], dtype=torch.int32)
 
         assert renderer.N == renderer.mean.shape[0]
 
@@ -548,3 +627,33 @@ class SHRenderer(torch.nn.Module):
             opt_params.append({"params": params, "lr": self.cfg.get(f"{name}_lr", lr)})
 
         return torch.optim.Adam(opt_params, lr=lr)
+
+    def select_masked_gaussians(self, mask):
+        self.mean = torch.nn.Parameter(self.mean.data[mask])
+        self.qvec = torch.nn.Parameter(self.qvec.data[mask])
+        self.sh_coeffs = torch.nn.Parameter(self.sh_coeffs.data[mask])
+        self.alpha_before_activation = torch.nn.Parameter(
+            self.alpha_before_activation.data[mask]
+        )
+        self.svec_before_activation = torch.nn.Parameter(
+            self.svec_before_activation.data[mask]
+        )
+        self.N = self.mean.shape[0]
+
+    def vis_grads_gaussians(self, thresh):
+        mask = torch.zeros_like(self.mean[..., 0], dtype=torch.bool)
+        mask[self.frustum_culling_mask] = self.mean_2d.grad.norm(dim=-1) > thresh
+        # mask = self.mean.grad.abs().mean(dim=-1) > thresh
+        self.select_masked_gaussians(mask)
+
+    @torch.no_grad()
+    def log_statistics(self, writer, epoch):
+        writer.add_histogram("hists/mean", self.mean.norm(dim=-1).cpu().numpy(), epoch)
+        writer.add_histogram(
+            "hists/svec", self.svec.max(dim=-1)[0].cpu().numpy(), epoch
+        )
+        writer.add_histogram("hists/alpha", self.alpha.cpu().numpy(), epoch)
+        if self.mean.grad is not None:
+            writer.add_histogram(
+                "hists/grad_mean", self.mean.grad.norm(dim=-1).cpu().numpy(), epoch
+            )

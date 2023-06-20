@@ -689,6 +689,7 @@ class _render_sh(torch.autograd.Function):
         thresh,
     ):
         out = torch.zeros([H * W * 3], dtype=torch.float32, device=mean.device)
+        torch.cuda.profiler.cudart().cudaProfilerStart()
         _backend.tile_based_vol_rendering_sh(
             mean,
             cov,
@@ -710,6 +711,7 @@ class _render_sh(torch.autograd.Function):
             C,
             thresh,
         )
+        torch.cuda.profiler.cudart().cudaProfilerStop()
         ctx.save_for_backward(
             mean,
             cov,
@@ -768,7 +770,8 @@ class _render_sh(torch.autograd.Function):
         ) = ctx.const
 
         tic()
-        _backend.tile_based_vol_rendering_backward_sh_warp_reduce(
+        torch.cuda.profiler.cudart().cudaProfilerStart()
+        _backend.tile_based_vol_rendering_backward_sh(
             mean,
             cov,
             sh_coeffs,
@@ -794,6 +797,7 @@ class _render_sh(torch.autograd.Function):
             C,
             thresh,
         )
+        torch.cuda.profiler.cudart().cudaProfilerStop()
         toc("render backward")
 
         # print_info(grad_mean, "grad_mean")

@@ -3,14 +3,14 @@ debug: False
 timing: False
 
 # system
-mode: train_only
+mode: train_and_eval
 device: cuda:0
 eval_iteration: 50
 
 # data
-data_name: fern
-data_dir: ./data/llff
-image_dir: ./data/llff/images_2
+data_name: garden
+data_dir: ./data/garden
+image_dir: ./data/garden/images_2
 downsample: 4
 save_iteration: 1000
 
@@ -38,7 +38,7 @@ ssim_loss_win_size: 11
 
 # spherical harmonics
 sh_order: 3
-sh_upgrades: [2000, 4000]
+sh_upgrades: []
 
 # activation functions
 alpha_act: sigmoid
@@ -50,15 +50,18 @@ warm_up: 500
 adaptive_control_iteration: 101
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
-alpha_reset_period: 100000000
-remove_low_alpha_period: 101
+alpha_reset_period: 1000
+remove_low_alpha_period: 1000
 alpha_reset_val: 0.1
-alpha_thresh: 0.05
+alpha_thresh: 0.15
 split_scale_thresh: 0.02
 cum_grad: False
+split_type: 2d_mean_grad
+split_reduction: mean
+svec_thresh: 50
 
 # wandb
-wandb: True
+wandb: False
 
 # viewer config
 viewer: False
@@ -78,7 +81,7 @@ alpha_lr: 1e-2
 comment: ""
 
 # from checkpoint
-from_ckpt: False
-ckpt_path: a/b/c
-start_epoch: 0
+from_ckpt: True
+ckpt_path: ./saved/2023-06-18_13:03:17_garden_sh/model_1000.pt
+start_epoch: 500
 vis_grad_thresh: 0.0002

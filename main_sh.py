@@ -66,7 +66,7 @@ def train_and_eval(cfg):
 
     c2ws, camera_info, images, pts, rgb, eval_mask = get_c2ws_and_camera_info_v1(cfg)
     c2ws = c2ws.to(cfg.device).contiguous()
-    renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
+    # renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
 
     train_images = images[~eval_mask].contiguous()
     eval_images = images[eval_mask].contiguous()
@@ -80,7 +80,12 @@ def train_and_eval(cfg):
 
     console.print(f"[green bold]#(train images): {N_train} #(eval images): {N_eval}")
 
-    renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
+    if not cfg.from_ckpt:
+        start = 0
+        renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
+    else:
+        renderer = SHRenderer.load(cfg.ckpt_path, cfg).to(cfg.device)
+        start = cfg.start_epoch
     loss_fn = get_loss_fn(cfg)
     metric_meter = Metrics(cfg.device)
 
@@ -99,8 +104,11 @@ def train_and_eval(cfg):
     writer.add_text("cfg", str(cfg))
     writer.add_text("comment", cfg.comment)
 
+    use_train_sample = cfg.get("use_train_sample", False)
+
+    renderer.train()
     with tqdm(total=cfg.max_iteration) as pbar:
-        for e in range(cfg.max_iteration):
+        for e in range(start, cfg.max_iteration):
             i = e % N_train
             tic()
             out = renderer(train_c2ws[i], camera_info)
@@ -108,6 +116,12 @@ def train_and_eval(cfg):
             if e == 0:
                 print_info(out, "out")
                 print("num total gaussian", renderer.total_dub_gaussians)
+                if cfg.debug:
+                    save_img(
+                        out.cpu().clamp(min=0.0, max=1.0),
+                        f"./tmp/debug",
+                        f"train_{e}.png",
+                    )
             if only_forward:
                 pbar.update(1)
                 continue
@@ -140,6 +154,36 @@ def train_and_eval(cfg):
 
             opt.step()
 
+            if step_check(e, cfg.eval_iteration):
+                renderer.eval()
+                metric_dicts = []
+                eval_losses = []
+                # do eval
+                with torch.no_grad():
+                    for j in range(N_eval):
+                        gt_eval_image = eval_images[j].to(cfg.device)
+                        eval_out = renderer(eval_c2ws[j], camera_info)
+                        eval_losses.append(loss_fn(eval_out, gt_eval_image).item())
+                        metric_dicts.append(metric_meter(eval_out, gt_eval_image))
+
+                    eval_loss = np.mean(eval_losses)
+                    eval_metrics = average_dicts(metric_dicts)
+
+                writer.add_scalar("eval/eval_loss", eval_loss, e)
+                for key, value in eval_metrics.items():
+                    writer.add_scalar(f"eval/{key}", value, e)
+                writer.add_image(
+                    f"eval/eval_img",
+                    eval_out.cpu().moveaxis(-1, 0).clamp(min=0, max=1.0),
+                    e,
+                )
+
+                info_line = f"[red bold]Iteration {e} Evaluation loss: {eval_loss:.4g}"
+                for key, value in eval_metrics.items():
+                    info_line += f" {key}: {value:.4g}"
+                console.print(info_line)
+                renderer.train()
+
             if cfg.adapt_ctrl_enabled:
                 renderer.adaptive_control(e)
 
@@ -153,31 +197,6 @@ def train_and_eval(cfg):
 
             if step_check(e, cfg.save_iteration):
                 renderer.save(f"./saved/{timestamp}_{cfg.data_name}_sh/model_{e}.pt")
-
-            if step_check(e, cfg.eval_iteration):
-                metric_dicts = []
-                eval_losses = []
-                # do eval
-                with torch.no_grad():
-                    for j in range(N_eval):
-                        gt_eval_image = eval_images[j].to(cfg.device)
-                        eval_out = renderer(eval_c2ws[j], camera_info)
-                        eval_losses.append(loss_fn(eval_out, gt_eval_image).item())
-                        print(eval_out.device)
-                        print(gt_eval_image.device)
-                        metric_dicts.append(metric_meter(eval_out, gt_eval_image))
-
-                    eval_loss = np.mean(eval_losses)
-                    eval_metrics = average_dicts(metric_dicts)
-
-                writer.add_scalar("eval/eval_loss", eval_loss, e)
-                for key, value in eval_metrics.items():
-                    writer.add_scalar(f"eval/{key}", value, e)
-
-                info_line = f"[red bold]Iteration {e} Evaluation loss: {eval_loss:.4g}"
-                for key, value in eval_metrics.items():
-                    info_line += f" {key}: {value:.4g}"
-                console.print(info_line)
 
             if cfg.viewer:
                 while viewer.pause_training:
@@ -291,6 +310,7 @@ def train_only(cfg):
                 renderer.adaptive_control(e)
 
             # opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
+            del opt
             opt = renderer.get_optimizer()
 
             # logger.info(f"Iteration: {e}/{cfg.max_iteration} loss: {loss.item():.4f}")

@@ -52,13 +52,15 @@ pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
 alpha_reset_period: 1000
 remove_low_alpha_period: 1000
-alpha_reset_val: 0.1
-alpha_thresh: 0.15
+alpha_reset_val: 0.02
+alpha_thresh: 0.02
 split_scale_thresh: 0.02
 cum_grad: False
 split_type: 2d_mean_grad
 split_reduction: mean
 svec_thresh: 50
+remove_large_period: 101
+world_large_threhs: 40
 
 # wandb
 wandb: False

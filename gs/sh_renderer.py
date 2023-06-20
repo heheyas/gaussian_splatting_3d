@@ -131,6 +131,9 @@ class SHRenderer(torch.nn.Module):
         self.split_reduction = cfg.get("split_reduction", "max")
         self.svec_thresh = cfg.get("svec_thresh", 50)
 
+        self.remove_large_period = cfg.get("remove_large_period", 500)
+        self.world_large_thresh = cfg.get("world_large_thresh", 30)
+
         # SH
         self.sh_upgrades = cfg.sh_upgrades
 
@@ -555,6 +558,10 @@ class SHRenderer(torch.nn.Module):
 
         # if self.remove_tiny and step_check(epoch, self.remove_tiny_period):
         #     self.remove_tiny_gaussians()
+
+        if step_check(epoch, self.remove_large_period):
+            self.remove_large_gaussians()
+
         self.grad_mean = torch.zeros_like(self.mean[..., 0])
         self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
         gc.collect()

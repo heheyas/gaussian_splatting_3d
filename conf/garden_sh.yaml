@@ -13,6 +13,7 @@ data_dir: ./data/garden
 image_dir: ./data/garden/images_4
 downsample: 4
 save_iteration: 1000
+log_iteration: 50
 
 # renderer
 tile_size: 16

@@ -9,14 +9,14 @@ _src_path = os.path.dirname(os.path.abspath(__file__))
 nvcc_flags = [
     "-O3",
     "-std=c++14",
-    "-G",
-    "-g",
-    "-lineinfo",
-    "-U__CUDA_NO_HALF_OPERATORS__",
-    "-U__CUDA_NO_HALF_CONVERSIONS__",
-    "-U__CUDA_NO_HALF2_OPERATORS__",
-    "-arch",
-    "compute_86",
+    # "-G",
+    # "-g",
+    # "-lineinfo",
+    # "-U__CUDA_NO_HALF_OPERATORS__",
+    # "-U__CUDA_NO_HALF_CONVERSIONS__",
+    # "-U__CUDA_NO_HALF2_OPERATORS__",
+    # "-arch",
+    # "compute_86",
 ]
 
 cub_home = os.environ.get("CUB_HOME", None)

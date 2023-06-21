@@ -173,3 +173,5 @@ logs/
 profile_outputs/
 saved/
 wandb/
+!images/*.png
+*.pdf

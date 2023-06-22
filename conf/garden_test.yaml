@@ -13,6 +13,7 @@ data_dir: ./data/garden
 image_dir: ./data/garden/images_2
 downsample: 4
 save_iteration: 1000
+log_iteration: 50
 
 # renderer
 tile_size: 16
@@ -27,18 +28,18 @@ tile_culling_radius: 6.0
 svec_init_method: nearest
 nearest_k: 3
 random_init: False
-max_iteration: 10000
+max_iteration: 7001
 lr: 1e-2
 alpha_init: 0.5
 svec_init: 0.02
-loss_fn: l2
-T_thresh: 0.01 # early stop threshold for transmitance
+loss_fn: l1
+T_thresh: 0.0001 # early stop threshold for transmitance
 ssim_loss_mult: 0.2 
 ssim_loss_win_size: 11
 
 # spherical harmonics
 sh_order: 3
-sh_upgrades: []
+sh_upgrades: [1000, 2000]
 
 # activation functions
 alpha_act: sigmoid
@@ -50,7 +51,7 @@ warm_up: 500
 adaptive_control_iteration: 101
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
-alpha_reset_period: 1000
+alpha_reset_period: 100000000
 remove_low_alpha_period: 1000
 alpha_reset_val: 0.02
 alpha_thresh: 0.02
@@ -79,11 +80,17 @@ svec_lr: 1e-2
 sh_coeffs_lr: 1e-2
 alpha_lr: 1e-2
 
+mean_lr_scheduler: None
+qvec_lr_scheduler: None
+svec_lr_scheduler: None
+sh_coeffs_lr_scheduler: None
+alpha_lr_scheduler: None
+
 # misc
 comment: ""
 
 # from checkpoint
-from_ckpt: True
-ckpt_path: ./saved/2023-06-18_13:03:17_garden_sh/model_1000.pt
+from_ckpt: False
+ckpt_path: a/b/c
 start_epoch: 500
 vis_grad_thresh: 0.0002

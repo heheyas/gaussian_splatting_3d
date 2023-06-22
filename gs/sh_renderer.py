@@ -65,6 +65,7 @@ class SHRenderer(torch.nn.Module):
             self.initialize(cfg, pts, rgb)
 
         self.now_C = 1
+        self.N_changed = False
 
         if hasattr(self, "mean"):
             self.register_buffer("grad_mean", torch.zeros_like(self.mean[..., 0]))
@@ -549,22 +550,28 @@ class SHRenderer(torch.nn.Module):
 
         if step_check(epoch, self.adaptive_control_iteration) or force:
             self.split_gaussians()
+            self.N_changed = True
 
         if step_check(epoch, self.remove_low_alpha_period) or force:
             self.remove_low_alpha_gaussians()
+            self.N_changed = True
 
         if step_check(epoch, self.alpha_reset_period) or force:
             self.reset_alpha()
+            self.N_changed = True
 
         # if self.remove_tiny and step_check(epoch, self.remove_tiny_period):
         #     self.remove_tiny_gaussians()
 
-        if step_check(epoch, self.remove_large_period):
-            self.remove_large_gaussians()
+        # if step_check(epoch, self.remove_large_period):
+        #     self.remove_large_gaussians()
+        #     self.N_changed = True
 
-        self.grad_mean = torch.zeros_like(self.mean[..., 0])
-        self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
-        gc.collect()
+        if self.N_changed:
+            self.grad_mean = torch.zeros_like(self.mean[..., 0])
+            self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
+            gc.collect()
+            self.N_changed = False
         torch.cuda.empty_cache()
 
     def save(self, path):

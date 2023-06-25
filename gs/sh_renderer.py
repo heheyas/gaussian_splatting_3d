@@ -17,6 +17,7 @@ from utils.misc import lineprofiler
 from timeit import timeit
 from time import time
 from .initialize import cov_init
+from utils.schedulers import lr_schedulers
 
 console = Console()
 
@@ -25,7 +26,7 @@ try:
 except ImportError:
     from .backend import _backend
 
-from gs.renderer import render_sh, step_check, project_gaussians
+from gs.renderer import render_sh, step_check, project_gaussians, render_sh_bg
 
 
 sh_base = 0.28209479177387814
@@ -73,6 +74,7 @@ class SHRenderer(torch.nn.Module):
                 "cnt", torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
             )
         self.set_cfg(cfg)
+        self.set_scheduler(cfg)
 
     def initialize(self, cfg, pts, rgb):
         self.N = pts.shape[0]
@@ -138,26 +140,77 @@ class SHRenderer(torch.nn.Module):
         # SH
         self.sh_upgrades = cfg.sh_upgrades
 
+        # tests
+        self.depth_detach = cfg.get("depth_detach", True)
+
+        self.bg = cfg.get("bg", False)
+        if self.bg:
+            self.bg_rgb = cfg.get("bg_rgb", [1.0, 1.0, 1.0])
+            self.bg_rgb = torch.FloatTensor(self.bg_rgb).to(self.device)
+
+        self.skip_frustum_culling = cfg.get("skip_frustum_culling", False)
+
+    def set_scheduler(self, cfg):
+        self.scheduler = dict()
+        self.scheduler["mean"] = lr_schedulers[cfg.get("mean_scheduler", "nothing")](
+            cfg.max_iteration,
+            cfg.mean_lr,
+            cfg.get("mean_lr_end", cfg.mean_lr),
+            cfg.get("mean_warmup_steps", cfg.warmup_steps),
+        )
+        self.scheduler["svec"] = lr_schedulers[cfg.get("svec_scheduler", "nothing")](
+            cfg.max_iteration,
+            cfg.svec_lr,
+            cfg.get("svec_lr_end", cfg.svec_lr),
+            cfg.get("svec_warmup_steps", cfg.warmup_steps),
+        )
+        self.scheduler["qvec"] = lr_schedulers[cfg.get("qvec_scheduler", "nothing")](
+            cfg.max_iteration,
+            cfg.qvec_lr,
+            cfg.get("qvec_lr_end", cfg.qvec_lr),
+            cfg.get("qvec_warmup_steps", cfg.warmup_steps),
+        )
+        self.scheduler["sh_coeffs"] = lr_schedulers[
+            cfg.get("sh_coeffs_scheduler", "nothing")
+        ](
+            cfg.max_iteration,
+            cfg.sh_coeffs_lr,
+            cfg.get("sh_coeffs_lr_end", cfg.sh_coeffs_lr),
+            cfg.get("sh_coeffs_warmup_steps", cfg.warmup_steps),
+        )
+        self.scheduler["alpha"] = lr_schedulers[cfg.get("alpha_scheduler", "nothing")](
+            cfg.max_iteration,
+            cfg.alpha_lr,
+            cfg.get("alpha_lr_end", cfg.alpha_lr),
+            cfg.get("alpha_warmup_steps", cfg.warmup_steps),
+        )
+
     def forward(self, c2w, camera_info):
         f_normals, f_pts = camera_info.get_frustum(c2w)
         mask = torch.zeros(self.N, dtype=torch.bool, device=self.device)
-        with torch.no_grad():
-            _backend.culling_gaussian_bsphere(
-                self.mean,
-                self.qvec,
-                self.svec,
-                f_normals,
-                f_pts,
-                mask,
-                self.frustum_culling_radius,
-            )
+        if self.skip_frustum_culling:
+            mask = torch.ones_like(mask, dtype=torch.bool, device=self.device)
+        else:
+            with torch.no_grad():
+                _backend.culling_gaussian_bsphere(
+                    self.mean,
+                    self.qvec,
+                    self.svec,
+                    f_normals,
+                    f_pts,
+                    mask,
+                    self.frustum_culling_radius,
+                )
+
         mean = self.mean[mask].contiguous()
         qvec = self.qvec[mask].contiguous()
         svec = self.svec[mask].contiguous()
         sh_coeffs = self.sh_coeffs[mask].contiguous()
         alpha = self.alpha[mask].contiguous()
 
-        mean, cov, JW, depth = project_gaussians(mean, qvec, svec, c2w)
+        mean, cov, JW, depth = project_gaussians(
+            mean, qvec, svec, c2w, self.depth_detach
+        )
 
         if hasattr(self, "cnt"):
             self.cnt[mask] += 1
@@ -213,26 +266,50 @@ class SHRenderer(torch.nn.Module):
 
         tic()
         # torch.cuda.profiler.cudart().cudaProfilerStart()
-        out = render_sh(
-            mean,
-            cov,
-            sh_coeffs[..., : self.now_C * self.now_C].contiguous(),
-            alpha,
-            start,
-            end,
-            gaussian_ids,
-            img_topleft,
-            c2w,
-            self.tile_size,
-            n_tiles_h,
-            n_tiles_w,
-            pixel_size_x,
-            pixel_size_y,
-            H,
-            W,
-            self.now_C,
-            self.T_thresh,
-        )
+        if not self.bg:
+            out = render_sh(
+                mean,
+                cov,
+                sh_coeffs[..., : self.now_C * self.now_C].contiguous(),
+                alpha,
+                start,
+                end,
+                gaussian_ids,
+                img_topleft,
+                c2w,
+                self.tile_size,
+                n_tiles_h,
+                n_tiles_w,
+                pixel_size_x,
+                pixel_size_y,
+                H,
+                W,
+                self.now_C,
+                self.T_thresh,
+            )
+        else:
+            assert hasattr(self, "bg_rgb")
+            out = render_sh_bg(
+                mean,
+                cov,
+                sh_coeffs[..., : self.now_C * self.now_C].contiguous(),
+                alpha,
+                start,
+                end,
+                gaussian_ids,
+                img_topleft,
+                c2w,
+                self.tile_size,
+                n_tiles_h,
+                n_tiles_w,
+                pixel_size_x,
+                pixel_size_y,
+                H,
+                W,
+                self.now_C,
+                self.T_thresh,
+                self.bg_rgb,
+            )
         # torch.cuda.profiler.cudart().cudaProfilerStop()
         toc("render sh")
 
@@ -254,6 +331,13 @@ class SHRenderer(torch.nn.Module):
         self.log_grad_bounds(writer, step)
         self.log_n_gaussian_dub(writer, step)
         self.log_statistics(writer, step)
+        self.log_lr(writer, step)
+
+    @torch.no_grad()
+    def log_lr(self, writer, step):
+        params = self.get_param_groups()
+        for name in params.keys():
+            writer.add_scalar(f"lr/{name}", self.scheduler[name](step), step)
 
     @torch.no_grad()
     def log_depth_and_radius(self, writer, step):
@@ -538,13 +622,15 @@ class SHRenderer(torch.nn.Module):
             else:
                 raise NotImplementedError
 
+    @lineprofiler
     def adaptive_control(self, epoch, force=False):
-        if epoch < self.warm_up:
-            return
-
         if epoch in self.sh_upgrades:
             self.now_C += 1
             self.now_C = min(self.now_C, self.max_C)
+            console.print(f"Spherical Harmonics now: {self.now_C}", style="magenta")
+
+        if epoch < self.warm_up:
+            return
 
         self.update_grads()
 
@@ -572,7 +658,7 @@ class SHRenderer(torch.nn.Module):
             self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
             gc.collect()
             self.N_changed = False
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
     def save(self, path):
         path = Path(path)
@@ -631,16 +717,16 @@ class SHRenderer(torch.nn.Module):
         }
         return param_groups
 
-    def get_optimizer(self):
+    def get_optimizer(self, epoch):
         lr = self.cfg.lr
 
         opt_params = []
 
         param_groups = self.get_param_groups()
         for name, params in param_groups.items():
-            opt_params.append({"params": params, "lr": self.cfg.get(f"{name}_lr", lr)})
+            opt_params.append({"params": params, "lr": self.scheduler[name](epoch)})
 
-        return torch.optim.Adam(opt_params, lr=lr)
+        return torch.optim.Adam(opt_params, lr=lr, betas=(0.9, 0.99))
 
     def select_masked_gaussians(self, mask):
         self.mean = torch.nn.Parameter(self.mean.data[mask])
@@ -671,3 +757,12 @@ class SHRenderer(torch.nn.Module):
             writer.add_histogram(
                 "hists/grad_mean", self.mean.grad.norm(dim=-1).cpu().numpy(), epoch
             )
+
+    ## exports
+    def to_pointcloud(self):
+        pcd = {}
+        pcd["pos"] = self.mean.cpu().numpy()
+        pcd["rgb"] = self.sh_coeffs[..., 0].cpu().numpy()
+        pcd["alpha"] = self.alpha.cpu().numpy()
+
+        return pcd

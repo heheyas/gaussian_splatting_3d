@@ -6,7 +6,8 @@ timing: False
 mode: train_and_eval
 device: cuda:0
 eval_iteration: 1000
-eval_type: mipnerf
+eval_type: mipnerf 
+# `mipnerf` for evaluating with every 8 images, `nerfstudio` for using the `transforms_test.json` file.
 
 # data
 data_name: garden
@@ -15,6 +16,10 @@ image_dir: ./data/garden/images_2
 downsample: 4
 save_iteration: 1000
 log_iteration: 500
+
+# train
+use_train_sample: False
+ema: 0.9
 
 # renderer
 tile_size: 16
@@ -39,7 +44,7 @@ ssim_loss_mult: 0.2
 ssim_loss_win_size: 11
 
 # spherical harmonics
-sh_order: 3
+sh_order: 1
 sh_upgrades: []
 
 # activation functions
@@ -48,7 +53,7 @@ svec_act: exp
 
 # gaussian adaptive control
 adapt_ctrl_enabled: True
-warm_up: 1000
+warm_up: 1000000000000000
 adaptive_control_iteration: 100
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
@@ -73,6 +78,7 @@ viewer_port: 1234
 
 # tests
 only_forward: False
+depth_detach: True
 
 # lrs
 mean_lr: 3e-3
@@ -81,17 +87,19 @@ svec_lr: 3e-2
 sh_coeffs_lr: 3e-2
 alpha_lr: 3e-2
 
-mean_lr_end: 3e-4
-qvec_lr_end: 3e-3
-svec_lr_end: 3e-3
-sh_coeffs_lr_end: 3e-2
-alpha_lr_end: 3e-2
+mean_lr_end: 3e-5
+qvec_lr_end: 3e-4
+svec_lr_end: 3e-4
+sh_coeffs_lr_end: 3e-4
+alpha_lr_end: 3e-4
 
 mean_scheduler: exp
 qvec_scheduler: exp
 svec_scheduler: exp
-sh_coeffs_scheduler: nothing
-alpha_scheduler: nothing
+sh_coeffs_scheduler: exp
+alpha_scheduler: exp
+
+warmup_steps: 0
 
 # misc
 comment: ""

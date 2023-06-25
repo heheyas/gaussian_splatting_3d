@@ -9,27 +9,37 @@ eval_iteration: 1000
 eval_type: mipnerf
 
 # data
-data_name: garden
-data_dir: ./data/garden
-image_dir: ./data/garden/images_2
-downsample: 4
+data_type: blender
+data_name: lego
+data_dir: ./data/nerf_synthetic/lego
+downsample: 1
 save_iteration: 1000
 log_iteration: 500
+num_points: 100e3
+
+# train
+use_train_sample: False
+ema: 0.9
+
+bounds: 1.5
 
 # renderer
 tile_size: 16
-near_plane: 1.5
-far_plane: 1000.0
+near_plane: 0.01
+far_plane: 5.0
 frustum_culling_radius: 1.0
 tile_culling_type: aabb
 tile_culling_thresh: 0.01
 tile_culling_radius: 6.0
+bg: False
+bg_rgb: [0.0, 0.0, 0.0]
+skip_frustum_culling: False
 
 # model
-svec_init_method: nearest
+svec_init_method: fixed
 nearest_k: 3
 random_init: False
-max_iteration: 7001
+max_iteration: 8001
 lr: 1e-2
 alpha_init: 0.5
 svec_init: 0.02
@@ -39,7 +49,7 @@ ssim_loss_mult: 0.2
 ssim_loss_win_size: 11
 
 # spherical harmonics
-sh_order: 3
+sh_order: 1
 sh_upgrades: []
 
 # activation functions
@@ -55,7 +65,7 @@ scale_shrink_factor: 1.6
 alpha_reset_period: 3000
 remove_low_alpha_period: 3000
 alpha_reset_val: 0.02
-alpha_thresh: 0.02
+alpha_thresh: 0.021
 split_scale_thresh: 0.02
 cum_grad: False
 split_type: 2d_mean_grad
@@ -81,17 +91,19 @@ svec_lr: 3e-2
 sh_coeffs_lr: 3e-2
 alpha_lr: 3e-2
 
-mean_lr_end: 3e-4
-qvec_lr_end: 3e-3
+mean_lr_end: 3e-5
+qvec_lr_end: 3e-4
 svec_lr_end: 3e-3
-sh_coeffs_lr_end: 3e-2
-alpha_lr_end: 3e-2
+sh_coeffs_lr_end: 3e-4
+alpha_lr_end: 3e-4
 
 mean_scheduler: exp
 qvec_scheduler: exp
 svec_scheduler: exp
-sh_coeffs_scheduler: nothing
-alpha_scheduler: nothing
+sh_coeffs_scheduler: exp
+alpha_scheduler: exp
+
+warmup_steps: 0
 
 # misc
 comment: ""
@@ -100,4 +112,4 @@ comment: ""
 from_ckpt: False
 ckpt_path: a/b/c
 start_epoch: 500
-vis_grad_thresh: 0.0002
+vis_grad_thresh: 0.0

@@ -662,16 +662,28 @@ __device__ void vol_render_one_batch_sh_backward_warp_reduce(
       break;
     }
     float alpha_ = fminf(alpha[i], 0.99f);
-    float G = kernel_gaussian_2d(mean + 2 * i, cov + 4 * i, pos); // a * G
+    float G = kernel_gaussian_2d_float(mean + 2 * i, cov + 4 * i, pos); // a * G
     // assert(G >= 0.0f && G <= 1.0f);
     if (alpha_ * G < MIN_RENDER_ALPHA) {
       continue;
     }
     float coeff = alpha_ * cum_alpha * G; // a * T * G
+    if (isnan(coeff)) {
+      coeff = 0.0f;
+    }
     // checkValue(coeff);
     float y0 = SIGMOID(sum_C<C>(sh_coeffs + 3 * i * CC, sh_consts));
     float y1 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 1) * CC, sh_consts));
     float y2 = SIGMOID(sum_C<C>(sh_coeffs + (3 * i + 2) * CC, sh_consts));
+    if (isnan(y0 * coeff)) {
+      y0 = 0.0f;
+    }
+    if (isnan(y1 * coeff)) {
+      y1 = 0.0f;
+    }
+    if (isnan(y2 * coeff)) {
+      y2 = 0.0f;
+    }
     out[0] += coeff * y0;
     out[1] += coeff * y1;
     out[2] += coeff * y2;
@@ -682,7 +694,7 @@ __device__ void vol_render_one_batch_sh_backward_warp_reduce(
     backward_C_nonatomic<C>(local_grad_sh_coeffs + 2 * CC, sh_consts,
                             coeff * SIGMOID_DSIGMOID(y2) * grad_out[2]);
 
-    double partial_aG = 0.0;
+    float partial_aG = 0.0;
     partial_aG +=
         grad_out[0] * (y0 * cum_alpha - (final[0] - out[0]) / (1 - alpha_ * G));
     partial_aG +=
@@ -710,21 +722,20 @@ __device__ void vol_render_one_batch_sh_backward_warp_reduce(
     for (int i = 0; i < 3 * C * C; ++i) {
       local_grad_sh_coeffs[i] = warpSum(local_grad_sh_coeffs[i], mask);
     }
-    //     if (local_id % 32 == leader_id) {
-    //       // perform once inside a warp
-    //       atomicAdd(grad_alpha + i, local_grad_alpha);
-    //       atomicAdd(grad_mean + 2 * i, local_grad_mean[0]);
-    //       atomicAdd(grad_mean + 2 * i + 1, local_grad_mean[1]);
-    //       atomicAdd(grad_cov + 4 * i, local_grad_cov[0]);
-    //       atomicAdd(grad_cov + 4 * i + 1, local_grad_cov[1]);
-    //       atomicAdd(grad_cov + 4 * i + 2, local_grad_cov[2]);
-    //       atomicAdd(grad_cov + 4 * i + 3, local_grad_cov[3]);
-    // #pragma unroll
-    //       for (int j = 0; j < 3 * C * C; ++j) {
-    //         atomicAdd(grad_sh_coeffs + 3 * C * C * i + j,
-    //         local_grad_sh_coeffs[j]);
-    //       }
-    //     }
+    if (local_id % 32 == leader_id) {
+      // perform once inside a warp
+      atomicAdd(grad_alpha + i, local_grad_alpha);
+      atomicAdd(grad_mean + 2 * i, local_grad_mean[0]);
+      atomicAdd(grad_mean + 2 * i + 1, local_grad_mean[1]);
+      atomicAdd(grad_cov + 4 * i, local_grad_cov[0]);
+      atomicAdd(grad_cov + 4 * i + 1, local_grad_cov[1]);
+      atomicAdd(grad_cov + 4 * i + 2, local_grad_cov[2]);
+      atomicAdd(grad_cov + 4 * i + 3, local_grad_cov[3]);
+#pragma unroll
+      for (int j = 0; j < 3 * C * C; ++j) {
+        atomicAdd(grad_sh_coeffs + 3 * C * C * i + j, local_grad_sh_coeffs[j]);
+      }
+    }
   }
 }
 

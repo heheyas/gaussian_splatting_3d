@@ -393,6 +393,7 @@ def project_gaussians(
     qvec: TensorType["N", 4],
     svec: TensorType["N", 3],
     c2w: TensorType[3, 4],
+    detach_depth: bool = True,
 ):
     projected_mean = project_pts(mean, c2w)
     rotmat = qsvec2rotmat_batched(qvec, svec)
@@ -404,7 +405,10 @@ def project_gaussians(
     projected_cov = torch.bmm(torch.bmm(JW, sigma), torch.transpose(JW, -1, -2))[
         ..., :2, :2
     ].contiguous()
-    depth = projected_mean[..., 2:].clone().contiguous().detach()
+    if detach_depth:
+        depth = projected_mean[..., 2:].clone().contiguous().detach()
+    else:
+        depth = projected_mean[..., 2:].clone().contiguous()
 
     ###
     ### HUGE CAUTION HERE !!! the denominator here is detached
@@ -824,9 +828,175 @@ class _render_sh(torch.autograd.Function):
         )
 
 
+class _render_sh_bg(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        mean,
+        cov,
+        sh_coeffs,
+        alpha,
+        start,
+        end,
+        gaussian_ids,
+        topleft,
+        c2w,
+        tile_size,
+        n_tiles_h,
+        n_tiles_w,
+        pixel_size_x,
+        pixel_size_y,
+        H,
+        W,
+        C,
+        thresh,
+        bg_rgb,
+    ):
+        out = torch.zeros([H * W * 3], dtype=torch.float32, device=mean.device)
+        torch.cuda.profiler.cudart().cudaProfilerStart()
+        _backend.tile_based_vol_rendering_sh_with_bg(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+            bg_rgb,
+        )
+        torch.cuda.profiler.cudart().cudaProfilerStop()
+        ctx.save_for_backward(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+            bg_rgb,
+        )
+        ctx.const = [
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        ]
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad):
+        (
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            topleft,
+            c2w,
+            bg_rgb,
+        ) = ctx.saved_tensors
+
+        grad_mean = torch.zeros_like(mean)
+        grad_cov = torch.zeros_like(cov)
+        grad_sh_coeffs = torch.zeros_like(sh_coeffs)
+        grad_alpha = torch.zeros_like(alpha)
+        (
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+        ) = ctx.const
+
+        tic()
+        torch.cuda.profiler.cudart().cudaProfilerStart()
+        _backend.tile_based_vol_rendering_backward_sh_with_bg(
+            mean,
+            cov,
+            sh_coeffs,
+            alpha,
+            start,
+            end,
+            gaussian_ids,
+            out,
+            grad_mean,
+            grad_cov,
+            grad_sh_coeffs,
+            grad_alpha,
+            grad,
+            topleft,
+            c2w,
+            tile_size,
+            n_tiles_h,
+            n_tiles_w,
+            pixel_size_x,
+            pixel_size_y,
+            H,
+            W,
+            C,
+            thresh,
+            bg_rgb,
+        )
+        torch.cuda.profiler.cudart().cudaProfilerStop()
+        toc("render backward")
+
+        # print_info(grad_mean, "grad_mean")
+
+        return (
+            grad_mean,
+            grad_cov,
+            grad_sh_coeffs,
+            grad_alpha,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
 render = _render.apply
 render_start_end = _render_start_end.apply
 render_sh = _render_sh.apply
+render_sh_bg = _render_sh_bg.apply
 
 
 class GaussianRenderer(torch.nn.Module):

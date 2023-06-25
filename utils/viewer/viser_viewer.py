@@ -118,7 +118,7 @@ class ViserViewer:
     @torch.no_grad()
     def update(self):
         if self.need_update:
-            start = time.time()
+            times = []
             for client in self.server.get_clients().values():
                 camera = client.camera
                 camera_info = CameraInfo.from_fov_camera(
@@ -130,6 +130,7 @@ class ViserViewer:
                 )
                 c2w = torch.from_numpy(get_c2w(camera)).to(self.device)
                 try:
+                    start = time.time()
                     out = (
                         self.renderer(c2w, camera_info)
                         .detach()
@@ -138,19 +139,21 @@ class ViserViewer:
                         .numpy()
                         * 255.0
                     ).astype(np.uint8)
+                    end = time.time()
+                    times.append(end - start)
                 except RuntimeError as e:
                     print(e)
                     continue
                 client.set_background_image(out, format="jpeg")
-                self.debug_idx += 1
-                if self.debug_idx % 100 == 0:
-                    cv2.imwrite(
-                        f"./tmp/viewer/debug_{self.debug_idx}.png",
-                        cv2.cvtColor(out, cv2.COLOR_RGB2BGR),
-                    )
+                # self.debug_idx += 1
+                # if self.debug_idx % 100 == 0:
+                #     cv2.imwrite(
+                #         f"./tmp/viewer/debug_{self.debug_idx}.png",
+                #         cv2.cvtColor(out, cv2.COLOR_RGB2BGR),
+                #     )
+                del out
 
-            end = time.time()
-            self.render_times.append(end - start)
+            self.render_times.append(np.mean(times))
             self.fps.value = f"{1.0 / np.mean(self.render_times):.3g}"
             # print(f"Update time: {end - start:.3g}")
 

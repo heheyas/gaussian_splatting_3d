@@ -54,4 +54,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("tile_based_vol_rendering_backward_sh_warp_reduce",
         &tile_based_vol_rendering_backward_sh_warp_reduce,
         "backward while using warp reduce");
+  m.def("tile_based_vol_rendering_sh_with_bg",
+        &tile_based_vol_rendering_sh_with_bg,
+        "Tile based volume rendering with spherical harmonics and background");
+  m.def("tile_based_vol_rendering_backward_sh_with_bg",
+        &tile_based_vol_rendering_backward_sh_with_bg,
+        "Tile based volume "
+        "rendering backward "
+        "with spherical "
+        "harmonics and "
+        "background");
 }

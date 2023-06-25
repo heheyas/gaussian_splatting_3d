@@ -9,6 +9,7 @@ from .colmap import (
     read_pts_from_colmap,
     read_images_test,
     read_images_v1,
+    read_one_image,
 )
 from .misc import print_info, tic, toc
 from .transforms import rotmat2wxyz
@@ -445,7 +446,13 @@ def get_c2ws_and_camera_info_v1(cfg):
     rot, t, images, filenames = read_images_v1(image_bin, base / image_dirname)
     toc("read images v1")
 
-    eval_mask = get_eval_mask(base, filenames)
+    if cfg.eval_type == "mipnerf":
+        eval_mask = torch.zeros(images.shape[0], dtype=torch.bool)
+        eval_mask[::8] = True
+    elif cfg.eval_type == "nerfstudio":
+        eval_mask = get_eval_mask(base, filenames)
+    else:
+        raise NotImplementedError
 
     console.print("[bold green]Loading points...")
     if points_cached.exists():
@@ -521,3 +528,82 @@ def get_c2ws_and_camera_info_v1(cfg):
     c2ws = c2ws.to(cfg.device)
 
     return c2ws, camera_info, images, pts, rgb, eval_mask
+
+
+def read_from_json(cfg):
+    downsample = cfg.downsample
+    base_dir = Path(cfg.data_dir)
+    assert base_dir.exists()
+
+    c2ws = []
+    images = []
+
+    H = 800
+    W = 800
+
+    with open(base_dir / "transforms_train.json", "r") as f:
+        meta = json.load(f)
+
+    camera_angle_x = float(meta["camera_angle_x"])
+    focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
+
+    camera_info = CameraInfo(
+        focal,
+        focal,
+        0.5 * W,
+        0.5 * H,
+        W,
+        H,
+        cfg.near_plane,
+        cfg.far_plane,
+    )
+
+    N_train = len(meta["frames"])
+    for ff in meta["frames"]:
+        c2w = np.array(ff["transform_matrix"])
+        img_name = str(Path(ff["file_path"]).name)
+        c2ws.append(c2w)
+        images.append(read_one_image(base_dir / "train" / f"{img_name}.png"))
+
+    with open(base_dir / "transforms_test.json", "r") as f:
+        meta = json.load(f)
+    N_eval = len(meta["frames"])
+    for ff in meta["frames"]:
+        c2w = np.array(ff["transform_matrix"])
+        img_name = str(Path(ff["file_path"]).name)
+        c2ws.append(c2w)
+        images.append(read_one_image(base_dir / "test" / f"{img_name}.png"))
+
+    eval_mask = np.zeros(N_train + N_eval, dtype=np.bool)
+    eval_mask[N_train:] = True
+    c2ws = np.array(c2ws)
+    images = np.array(images)
+
+    if downsample > 1:
+        images = images[:, ::downsample, ::downsample, :]
+        camera_info.downsample(downsample)
+
+    return c2ws, images, camera_info, eval_mask
+
+
+def get_c2ws_and_camera_info_nerf_sythetic(cfg):
+    console.print("Using synthetic data...", style="magenta")
+    console.print("[bold green]Loading camera info and randomly init points and rgb...")
+
+    c2ws, images, camera_info, eval_mask = read_from_json(cfg)
+    c2ws = torch.from_numpy(c2ws).to(torch.float32)[:, :3]
+    # OpenGL c2ws to OpenCV c2ws (flip y and z axis)
+    c2ws[..., :3, 1] = -c2ws[..., :3, 1]
+    c2ws[..., :3, 2] = -c2ws[..., :3, 2]
+    images = torch.from_numpy(images).to(torch.float32)
+    eval_mask = torch.from_numpy(eval_mask).to(torch.bool)
+
+    num_points = int(cfg.num_points)
+
+    xyz = torch.randn((num_points, 3)).to(torch.float32)
+    xyz = xyz.clamp(-cfg.bounds, cfg.bounds)
+
+    rgb = torch.rand((num_points, 3)).to(torch.float32)
+    rgb = rgb.clamp(0.001, 0.999)
+
+    return c2ws, camera_info, images, xyz, rgb, eval_mask

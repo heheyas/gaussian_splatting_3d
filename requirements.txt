@@ -1,8 +1,11 @@
 torch
-numpy
+numpy==1.23.4
 torchtyping
 hydra-core
 kornia
 visdom
 rich
-torchmetrics
+torchmetrics[images]
+line_profiler
+trimesh
+viser

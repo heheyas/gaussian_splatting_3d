@@ -141,3 +141,10 @@ def average_dicts(dicts):
     for k in dicts[0].keys():
         avg_dict[k] = np.mean([d[k] for d in dicts])
     return avg_dict
+
+
+def reduce_dicts(dicts, fn):
+    avg_dict = {}
+    for k in dicts[0].keys():
+        avg_dict[k] = fn([d[k] for d in dicts])
+    return avg_dict

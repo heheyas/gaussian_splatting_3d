@@ -7,7 +7,11 @@ import numpy as np
 import hydra
 from gs.renderer import GaussianRenderer
 from gs.sh_renderer import SHRenderer
-from utils.camera import get_c2ws_and_camera_info, get_c2ws_and_camera_info_v1
+from utils.camera import (
+    get_c2ws_and_camera_info,
+    get_c2ws_and_camera_info_v1,
+    get_c2ws_and_camera_info_nerf_sythetic,
+)
 from functools import partial
 from utils.misc import (
     print_info,
@@ -22,6 +26,8 @@ from utils.metrics import Metrics
 from utils import misc
 from utils.loss import get_loss_fn
 import visdom
+from omegaconf import OmegaConf
+import matplotlib.pyplot as plt
 
 from rich.console import Console
 from tqdm import tqdm
@@ -64,7 +70,27 @@ def train_and_eval(cfg):
         tic()
         toc("test")
 
-    c2ws, camera_info, images, pts, rgb, eval_mask = get_c2ws_and_camera_info_v1(cfg)
+    data_type = cfg.get("data_type", "real")
+    if data_type == "real":
+        (
+            c2ws,
+            camera_info,
+            images,
+            pts,
+            rgb,
+            eval_mask,
+        ) = get_c2ws_and_camera_info_v1(cfg)
+    elif data_type == "blender":
+        (
+            c2ws,
+            camera_info,
+            images,
+            pts,
+            rgb,
+            eval_mask,
+        ) = get_c2ws_and_camera_info_nerf_sythetic(cfg)
+    else:
+        raise NotImplementedError
     c2ws = c2ws.to(cfg.device).contiguous()
     # renderer = SHRenderer(cfg, pts, rgb).to(cfg.device)
 
@@ -89,7 +115,7 @@ def train_and_eval(cfg):
     loss_fn = get_loss_fn(cfg)
     metric_meter = Metrics(cfg.device)
 
-    opt = renderer.get_optimizer()
+    opt = renderer.get_optimizer(start)
 
     if cfg.get("viewer", False):
         from utils.viewer.viser_viewer import ViserViewer
@@ -101,15 +127,26 @@ def train_and_eval(cfg):
     log_iteration = cfg.get("log_iteration", 50)
     only_forward = cfg.get("only_forward", False)
 
-    writer.add_text("cfg", str(cfg))
+    writer.add_text("cfg", OmegaConf.to_yaml(cfg))
     writer.add_text("comment", cfg.comment)
 
     use_train_sample = cfg.get("use_train_sample", False)
+    if use_train_sample:
+        ema = cfg.get("ema", 0.9)
+        image_weight = np.ones(N_train, dtype=np.float32)
+        image_sampled_freq = np.zeros(N_train, dtype=np.int32)
 
     renderer.train()
     with tqdm(total=cfg.max_iteration) as pbar:
         for e in range(start, cfg.max_iteration):
-            i = e % N_train
+            if use_train_sample:
+                i = np.random.choice(
+                    N_train,
+                    p=image_weight / np.sum(image_weight),
+                )
+                image_sampled_freq[i] += 1
+            else:
+                i = e % N_train
             tic()
             out = renderer(train_c2ws[i], camera_info)
             toc("whole renderer forward")
@@ -150,8 +187,15 @@ def train_and_eval(cfg):
                 writer.add_image(
                     "out", out.cpu().moveaxis(-1, 0).clamp(min=0, max=1.0), e
                 )
+                if use_train_sample:
+                    fig, ax = plt.subplots()
+                    ax.stairs(image_sampled_freq)
+                    writer.add_figure("train/image_sample_freq", fig, e)
+                # writer.add_histogram("train/image_sample_freq", image_sampled_freq, e)
                 renderer.log(writer, e)
 
+            if use_train_sample:
+                image_weight[i] = ema * loss.item() + (1 - ema) * image_weight[i]
             opt.step()
 
             if step_check(e, cfg.eval_iteration):
@@ -184,19 +228,19 @@ def train_and_eval(cfg):
                 console.print(info_line)
                 renderer.train()
 
+            if step_check(e, cfg.save_iteration):
+                renderer.save(f"./saved/{timestamp}_{cfg.data_name}_sh/model_{e}.pt")
+
             if cfg.adapt_ctrl_enabled:
                 renderer.adaptive_control(e)
 
             # opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
-            opt = renderer.get_optimizer()
+            opt = renderer.get_optimizer(e)
 
             # logger.info(f"Iteration: {e}/{cfg.max_iteration} loss: {loss.item():.4f}")
             pbar.set_description(f"Iteration: {e}/{cfg.max_iteration}")
             pbar.set_postfix(loss=f"{loss.item():.4f}")
             pbar.update(1)
-
-            if step_check(e, cfg.save_iteration):
-                renderer.save(f"./saved/{timestamp}_{cfg.data_name}_sh/model_{e}.pt")
 
             if cfg.viewer:
                 while viewer.pause_training:
@@ -215,9 +259,10 @@ def train_only(cfg):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 
     if cfg.wandb:
+        wandb.config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
         wandb.init(
             project="gs",
-            config=cfg,
+            # config=cfg,
             name=f"{cfg.data_name}_{timestamp}",
             sync_tensorboard=True,
         )
@@ -311,7 +356,7 @@ def train_only(cfg):
 
             # opt = torch.optim.Adam(renderer.parameters(), lr=cfg.lr)
             del opt
-            opt = renderer.get_optimizer()
+            opt = renderer.get_optimizer(e)
 
             # logger.info(f"Iteration: {e}/{cfg.max_iteration} loss: {loss.item():.4f}")
             pbar.set_description(f"Iteration: {e}/{cfg.max_iteration}")

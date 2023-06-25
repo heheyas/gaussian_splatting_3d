@@ -22,11 +22,17 @@ class Metrics:
             gt,
             data_range=1.0,
         )
+        ssim2 = self.ssim(
+            pred,
+            gt,
+            data_range=2.0,
+        )
         lpips = self.lpips(pred, gt)
 
         metrics = {
             "psnr": psnr.item(),
             "ssim": ssim.item(),
+            "ssim2": ssim2.item(),
             "lpips": lpips.item(),
         }
 

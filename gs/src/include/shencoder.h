@@ -1,3 +1,4 @@
+#pragma once
 #include "common.h"
 
 __host__ __device__ float SIGMOID(float x) { return 1.0f / (1.0f + expf(-x)); }
@@ -49,16 +50,16 @@ spherical_harmonic(const float *__restrict__ direction,
     outputs[13] = 0.45704579946446572f * x *
                   (1.0f - 5.0f * z2); // sqrt(42)*x*(1 - 5*z2)/(8*sqrt(pi))
     outputs[14] = 1.4453057213202769f * z *
-                  (x2 - y2); // sqrt(105)*z*(x2 - y2)/(4*sqrt(pi))
+                  (x2 - y2);          // sqrt(105)*z*(x2 - y2)/(4*sqrt(pi))
     outputs[15] = 0.59004358992664352f * x *
-                  (-x2 + 3.0f * y2); // sqrt(70)*x*(-x2 + 3*y2)/(8*sqrt(pi))
+                  (-x2 + 3.0f * y2);  // sqrt(70)*x*(-x2 + 3*y2)/(8*sqrt(pi))
     if (C <= 4) {
       return;
     }
     outputs[16] = 2.5033429417967046f * xy *
-                  (x2 - y2); // 3*sqrt(35)*xy*(x2 - y2)/(4*sqrt(pi))
+                  (x2 - y2);          // 3*sqrt(35)*xy*(x2 - y2)/(4*sqrt(pi))
     outputs[17] = 1.7701307697799304f * yz *
-                  (-3.0f * x2 + y2); // 3*sqrt(70)*yz*(-3*x2 + y2)/(8*sqrt(pi))
+                  (-3.0f * x2 + y2);  // 3*sqrt(70)*yz*(-3*x2 + y2)/(8*sqrt(pi))
     outputs[18] = 0.94617469575756008f * xy *
                   (7.0f * z2 - 1.0f); // 3*sqrt(5)*xy*(7*z2 - 1)/(4*sqrt(pi))
     outputs[19] = 0.66904654355728921f * yz *
@@ -66,7 +67,7 @@ spherical_harmonic(const float *__restrict__ direction,
     outputs[20] = -3.1735664074561294f * z2 + 3.7024941420321507f * z4 +
                   0.31735664074561293f; // 3*(-30*z2 + 35*z4 + 3)/(16*sqrt(pi))
     outputs[21] = 0.66904654355728921f * xz *
-                  (3.0f - 7.0f * z2); // 3*sqrt(10)*xz*(3 - 7*z2)/(8*sqrt(pi))
+                  (3.0f - 7.0f * z2);   // 3*sqrt(10)*xz*(3 - 7*z2)/(8*sqrt(pi))
     outputs[22] =
         0.47308734787878004f * (x2 - y2) *
         (7.0f * z2 - 1.0f); // 3*sqrt(5)*(x2 - y2)*(7*z2 - 1)/(8*sqrt(pi))

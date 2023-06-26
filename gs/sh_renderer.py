@@ -761,8 +761,8 @@ class SHRenderer(torch.nn.Module):
     ## exports
     def to_pointcloud(self):
         pcd = {}
-        pcd["pos"] = self.mean.cpu().numpy()
-        pcd["rgb"] = self.sh_coeffs[..., 0].cpu().numpy()
-        pcd["alpha"] = self.alpha.cpu().numpy()
+        pcd["pos"] = self.mean.data.cpu().numpy()
+        pcd["rgb"] = torch.sigmoid(self.sh_coeffs.data[..., 0]).cpu().numpy()
+        pcd["alpha"] = self.alpha.data.cpu().numpy()
 
         return pcd

@@ -16,7 +16,7 @@ from gs.culling import tile_culling_aabb_count
 from utils.misc import lineprofiler
 from timeit import timeit
 from time import time
-from .initialize import cov_init
+from .initialize import cov_init, alpha_center_anealing_init, alpha_trunc_init
 from utils.schedulers import lr_schedulers
 
 console = Console()
@@ -95,11 +95,28 @@ class SHRenderer(torch.nn.Module):
             self.svec_before_activation = torch.nn.Parameter(
                 self.svec_inv_act(init_svec).unsqueeze(1).repeat(1, 3)
             )
+        elif svec_init_method == "center":
+            ## TODO: big alpha for gaussians near the center
+            pass
         else:
             raise NotImplementedError
 
-        self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
-        self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
+        alpha_init_method = cfg.get("alpha_init_method", "fixed")
+        if alpha_init_method == "fixed":
+            self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
+            self.alpha_before_activation.data.fill_(self.alpha_inv_act(cfg.alpha_init))
+        elif alpha_init_method == "center":
+            self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
+            self.alpha_before_activation.data = self.alpha_inv_act(
+                alpha_center_anealing_init(pts, None, cfg.alpha_init)
+            )
+        elif alpha_init_method == "trunc":
+            self.alpha_before_activation = torch.nn.Parameter(torch.ones([self.N]))
+            self.alpha_before_activation.data = self.alpha_inv_act(
+                alpha_trunc_init(pts, cfg.alpha_init, 0.02, cfg.init_pts_bounds)
+            )
+        else:
+            raise NotImplementedError
 
     def set_cfg(self, cfg):
         # camera imaging params
@@ -766,3 +783,9 @@ class SHRenderer(torch.nn.Module):
         pcd["alpha"] = self.alpha.data.cpu().numpy()
 
         return pcd
+
+    def alpha_penalty(self, center=None):
+        if center is None:
+            center = torch.zeros_like(self.mean.data[0])[None, ...]
+
+        return (self.alpha * (self.mean.detach() - center).norm(dim=-1)).mean()

@@ -24,13 +24,20 @@ class RenderThread(Thread):
 
 
 class ViserViewer:
-    def __init__(self, cfg: OmegaConf):
+    def __init__(self, cfg: OmegaConf, train_mode=False):
         self.device = cfg.device
         self.port = cfg.viewer_port
 
+        self.train_mode = train_mode
+
         self.render_times = deque(maxlen=3)
         self.server = viser.ViserServer(port=self.port)
-        self.reset_view_button = self.server.add_gui_button("Reset View")
+        self.reset_view_button = self.server.add_gui_button("/View/Reset View")
+
+        self.toggle_axis = self.server.add_gui_checkbox(
+            "/View/Toggle Axis",
+            initial_value=True,
+        )
 
         self.need_update = False
 
@@ -63,7 +70,11 @@ class ViserViewer:
             "Show Train Camera", initial_value=False
         )
 
-        self.fps = self.server.add_gui_text("FPS", initial_value="-1", disabled=True)
+        self.fps = self.server.add_gui_text(
+            "FPS", initial_value="-1", disabled=True
+        )
+
+        self.axis = self.server.add_frame("/Axis", show_axes=True, axes_length=1000)
 
         @self.show_train_camera.on_update
         def _(_):
@@ -96,6 +107,11 @@ class ViserViewer:
                 client.camera.up_direction = tf.SO3(client.camera.wxyz) @ np.array(
                     [0.0, -1.0, 0.0]
                 )
+
+        @self.toggle_axis.on_update
+        def _(_):
+            self.need_update = True
+            self.axis.show_axes = self.toggle_axis.value
 
         self.c2ws = []
         self.camera_infos = []

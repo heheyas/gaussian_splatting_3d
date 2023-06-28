@@ -146,5 +146,11 @@ def average_dicts(dicts):
 def reduce_dicts(dicts, fn):
     avg_dict = {}
     for k in dicts[0].keys():
-        avg_dict[k] = fn([d[k] for d in dicts])
+        avg_dict[k] = fn(torch.stack([d[k] for d in dicts], dim=0), dim=0)
     return avg_dict
+
+
+def sum_dicts(dicts):
+    sum_dict = {}
+    for k in dicts[0].keys():
+        sum_dict[k] = torch.sum([d[k] for d in dicts])

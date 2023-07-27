@@ -29,6 +29,7 @@ tile_culling_type: aabb
 tile_culling_thresh: 0.01
 tile_culling_radius: 6.0
 bg: False
+random_bg: True
 bg_rgb: [0.0, 0.0, 0.0]
 skip_frustum_culling: False
 
@@ -54,13 +55,13 @@ alpha_act: sigmoid
 svec_act: exp
 
 # gaussian adaptive control
-adapt_ctrl_enabled: True
-warm_up: 1000
-adaptive_control_iteration: 500000
+adapt_ctrl_enabled: False
+warm_up: 3000
+adaptive_control_iteration: 400
 pos_grad_thresh: 0.0002
 scale_shrink_factor: 1.6
-alpha_reset_period: 1000
-remove_low_alpha_period: 1000
+alpha_reset_period: 100000000
+remove_low_alpha_period: 10000000
 alpha_reset_val: 0.02
 alpha_thresh: 0.021
 split_scale_thresh: 0.02
@@ -83,11 +84,11 @@ viewer_port: 1234
 only_forward: False
 
 # lrs
-mean_lr: 3e-3
-qvec_lr: 3e-2
-svec_lr: 3e-2
-sh_coeffs_lr: 3e-2
-alpha_lr: 3e-2
+mean_lr: 5e-2
+qvec_lr: 3e-3
+svec_lr: 3e-3
+sh_coeffs_lr: 3e-3
+alpha_lr: 3e-3
 
 mean_lr_end: 3e-5
 qvec_lr_end: 3e-4
@@ -114,13 +115,16 @@ vis_grad_thresh: 0.0
 
 diffusion_model: "stablediffusion"
 sd_version: "1-5"
-num_init_pts: 100e3
+num_init_pts: 10e3
 init_pts_std: 1.0
 init_pts_bounds: 2.0
 default_reso: 256
-guidance_scale: 25
+guidance_scale: 100
 
-batch_size: 4
+batch_size: 8
+opt: "adam"
+# opt_args:
+#   betas: [0.9, 0.99]
 
 camera_pose_provider:
   center: [0.0, 0.0, 0.0]
@@ -135,7 +139,14 @@ camera_pose_provider:
 
 loss:
   sds_loss_mult: 1.0
+  alpha_loss_type: "center_weighted"
   alpha_loss_mult: 0.01
+
+init_method: "random"
+
+point_e:
+  prompt: ""
+  scale: 1.0
 
 # prompts
 prompt: "a high quality photo of a pineapple"
@@ -144,3 +155,18 @@ side_prompt: ", side view"
 front_prompt: ", front view"
 back_prompt: ", back view"
 positional_prompting: "discrete"
+
+# grad clips
+grad_clip:
+  mean: null
+  svec: null
+  qvec: null
+  sh_coeffs: null
+  alpha: null
+  
+
+split:
+  enabled: False
+  warm_up: 3000
+  period: 1000
+  end: 6000

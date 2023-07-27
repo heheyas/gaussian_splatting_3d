@@ -25,18 +25,30 @@ __global__ void tile_based_vol_rendering_sh_entry_with_bg(
   int tile_id = blockIdx.y * gridDim.x + blockIdx.x;
   int global_y = blockIdx.y * tile_size + local_y;
   int global_x = blockIdx.x * tile_size + local_x;
+
+  float sh_consts[C * C];
+  float direction[3];
+  float out[3] = {0.0f, 0.0f, 0.0f};
+  float cum_alpha = 1.0f;
+
   if (start[tile_id] == -1) {
     // skip
     if (global_y >= H || global_x >= W) {
       return;
     }
-    out[0] = bg_rgb[0];
-    out[1] = bg_rgb[1];
-    out[2] = bg_rgb[2];
+    out_rgb[3 * (global_y * W + global_x) + 0] = bg_rgb[0];
+    out_rgb[3 * (global_y * W + global_x) + 1] = bg_rgb[1];
+    out_rgb[3 * (global_y * W + global_x) + 2] = bg_rgb[2];
     return;
   }
   int n_gaussians_this_tile = end[tile_id] - start[tile_id];
   if (n_gaussians_this_tile == 0) {
+    if (global_y >= H || global_x >= W) {
+      return;
+    }
+    out_rgb[3 * (global_y * W + global_x) + 0] = bg_rgb[0];
+    out_rgb[3 * (global_y * W + global_x) + 1] = bg_rgb[1];
+    out_rgb[3 * (global_y * W + global_x) + 2] = bg_rgb[2];
     return;
   }
 
@@ -51,11 +63,6 @@ __global__ void tile_based_vol_rendering_sh_entry_with_bg(
   float *sm_cov = sm_mean + 2 * max_gaussian_sm;
   float *sm_sh_coeffs = sm_cov + 4 * max_gaussian_sm;
   float *sm_alpha = sm_sh_coeffs + 3 * C * C * max_gaussian_sm;
-
-  float sh_consts[C * C];
-  float direction[3];
-  float out[3] = {0.0f, 0.0f, 0.0f};
-  float cum_alpha = 1.0f;
 
   float pos[3] = {topleft[0] + global_x * pixel_size_x,
                   topleft[1] + global_y * pixel_size_y, 1.0f};
@@ -87,11 +94,14 @@ __global__ void tile_based_vol_rendering_sh_entry_with_bg(
   if (global_y >= H || global_x >= W) {
     return;
   }
-  if (cum_alpha > thresh) {
-    out[0] = out[0] * cum_alpha + bg_rgb[0] * (1.0f - cum_alpha);
-    out[1] = out[1] * cum_alpha + bg_rgb[1] * (1.0f - cum_alpha);
-    out[2] = out[2] * cum_alpha + bg_rgb[2] * (1.0f - cum_alpha);
-  }
+  // if (cum_alpha > thresh) {
+  //   out[0] = out[0] * cum_alpha + bg_rgb[0] * (1.0f - cum_alpha);
+  //   out[1] = out[1] * cum_alpha + bg_rgb[1] * (1.0f - cum_alpha);
+  //   out[2] = out[2] * cum_alpha + bg_rgb[2] * (1.0f - cum_alpha);
+  // }
+  out[0] = out[0] + bg_rgb[0] * cum_alpha;
+  out[1] = out[1] + bg_rgb[1] * cum_alpha;
+  out[2] = out[2] + bg_rgb[2] * cum_alpha;
   out_rgb[3 * (global_y * W + global_x) + 0] = out[0];
   out_rgb[3 * (global_y * W + global_x) + 1] = out[1];
   out_rgb[3 * (global_y * W + global_x) + 2] = out[2];
@@ -141,9 +151,9 @@ __global__ void tile_based_vol_rendering_backward_sh_entry_with_bg(
     if (global_y >= H || global_x >= W) {
       return;
     }
-    out[0] = bg_rgb[0];
-    out[1] = bg_rgb[1];
-    out[2] = bg_rgb[2];
+    // out[0] = bg_rgb[0];
+    // out[1] = bg_rgb[1];
+    // out[2] = bg_rgb[2];
     return;
   }
   int n_gaussians_this_tile = end[tile_id] - start[tile_id];
@@ -219,11 +229,9 @@ __global__ void tile_based_vol_rendering_backward_sh_entry_with_bg(
   if (global_x >= W || global_y >= H) {
     return;
   }
-  if (cum_alpha > thresh) {
-    out[0] = out[0] * cum_alpha + bg_rgb[0] * (1.0f - cum_alpha);
-    out[1] = out[1] * cum_alpha + bg_rgb[1] * (1.0f - cum_alpha);
-    out[2] = out[2] * cum_alpha + bg_rgb[2] * (1.0f - cum_alpha);
-  }
+  out[0] = out[0] + bg_rgb[0] * cum_alpha;
+  out[1] = out[1] + bg_rgb[1] * cum_alpha;
+  out[2] = out[2] + bg_rgb[2] * cum_alpha;
   if (out_rgb[3 * (global_y * W + global_x) + 0] != out[0]) {
     printf("out_rgb[3 * (global_y * W + global_x) + 0] = %f, out[0] = %f\n",
            out_rgb[3 * (global_y * W + global_x) + 0], out[0]);

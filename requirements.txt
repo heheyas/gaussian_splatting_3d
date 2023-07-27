@@ -9,3 +9,7 @@ torchmetrics[images]
 line_profiler
 trimesh
 viser
+mediapy
+transformers
+diffusers
+accelerate

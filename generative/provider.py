@@ -45,6 +45,7 @@ class CameraPoseProvider:
         self.horizontal_warmup = self.cfg.get("horizontal_warmup", 0)
         self.horizontal_warmup = max(self.horizontal_warmup, 1)
         print("horizontal_warmup", self.horizontal_warmup)
+        print("vrot_range", self.vrot_range)
         print("hrot_range", self.hrot_range)
         print("focal_range", self.focal_range)
         print("real uniform", self.real_uniform)
@@ -72,9 +73,9 @@ class CameraPoseProvider:
 
         assert np.abs(horizontal_rotation) <= np.abs(self.hrot_range[1])
         radius = np.random.uniform(self.radius_range[0], self.radius_range[1])
-        x = radius * np.cos(vertical_rotation) * np.cos(horizontal_rotation)
-        y = radius * np.cos(vertical_rotation) * np.sin(horizontal_rotation)
-        z = radius * np.sin(vertical_rotation)
+        x = radius * np.sin(vertical_rotation) * np.cos(horizontal_rotation)
+        y = radius * np.sin(vertical_rotation) * np.sin(horizontal_rotation)
+        z = radius * np.cos(vertical_rotation)
 
         pos = np.array([x, y, z]) + self.center
 

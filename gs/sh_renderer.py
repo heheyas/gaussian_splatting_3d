@@ -18,6 +18,7 @@ from timeit import timeit
 from time import time
 from .initialize import cov_init, alpha_center_anealing_init, alpha_trunc_init
 from utils.schedulers import lr_schedulers
+from utils.optimizers import optimizers
 
 console = Console()
 
@@ -166,6 +167,19 @@ class SHRenderer(torch.nn.Module):
             self.bg_rgb = torch.FloatTensor(self.bg_rgb).to(self.device)
 
         self.skip_frustum_culling = cfg.get("skip_frustum_culling", False)
+
+        self.fields = ["mean", "qvec", "svec", "sh_coeffs", "alpha"]
+        self.opt_type = cfg.get("opt", "adam")
+        try:
+            self.opt_cls = optimizers[self.opt_type]
+            self.opt_args = self.cfg.get("opt_args", dict())
+        except KeyError:
+            console.print(f"[red bold]Optimizer {self.opt_type} not found")
+
+    def set_bg_rgb(self, rgb):
+        if not isinstance(rgb, torch.Tensor):
+            rgb = torch.FloatTensor(rgb).to(self.device)
+        self.bg_rgb = rgb
 
     def set_scheduler(self, cfg):
         self.scheduler = dict()
@@ -372,12 +386,12 @@ class SHRenderer(torch.nn.Module):
     @torch.no_grad()
     def log_bounds(self, writer, step):
         """log the bounds of the parameters"""
-        writer.add_scalar("bounds/mean_max", self.mean.max(), step)
-        writer.add_scalar("bounds/mean_min", self.mean.min(), step)
-        writer.add_scalar("bounds/qvec_max", self.qvec.max(), step)
-        writer.add_scalar("bounds/qvec_min", self.qvec.min(), step)
-        writer.add_scalar("bounds/svec_max", self.svec.max(), step)
-        writer.add_scalar("bounds/svec_min", self.svec.min(), step)
+        writer.add_scalar("bounds/mean_max", self.mean.abs().max(), step)
+        writer.add_scalar("bounds/mean_min", self.mean.abs().min(), step)
+        writer.add_scalar("bounds/qvec_max", self.qvec.abs().max(), step)
+        writer.add_scalar("bounds/qvec_min", self.qvec.abs().min(), step)
+        writer.add_scalar("bounds/svec_max", self.svec.abs().max(), step)
+        writer.add_scalar("bounds/svec_min", self.svec.abs().min(), step)
         writer.add_scalar(
             "bounds/color_max",
             self.sh_coeffs[..., : self.now_C * self.now_C].max(),
@@ -407,15 +421,15 @@ class SHRenderer(torch.nn.Module):
     def log_grad_bounds(self, writer, step):
         if self.mean.grad is None:
             return
-        writer.add_scalar("grad_bounds/mean_max", self.mean.grad.max(), step)
-        writer.add_scalar("grad_bounds/mean_min", self.mean.grad.min(), step)
-        writer.add_scalar("grad_bounds/qvec_max", self.qvec.grad.max(), step)
-        writer.add_scalar("grad_bounds/qvec_min", self.qvec.grad.min(), step)
+        writer.add_scalar("grad_bounds/mean_max", self.mean.grad.abs().max(), step)
+        writer.add_scalar("grad_bounds/mean_min", self.mean.grad.abs().min(), step)
+        writer.add_scalar("grad_bounds/qvec_max", self.qvec.grad.abs().max(), step)
+        writer.add_scalar("grad_bounds/qvec_min", self.qvec.grad.abs().min(), step)
         writer.add_scalar(
-            "grad_bounds/svec_max", self.svec_before_activation.grad.max(), step
+            "grad_bounds/svec_max", self.svec_before_activation.grad.abs().max(), step
         )
         writer.add_scalar(
-            "grad_bounds/svec_min", self.svec_before_activation.grad.min(), step
+            "grad_bounds/svec_min", self.svec_before_activation.grad.abs().min(), step
         )
         writer.add_scalar(
             "grad_bounds/sh_coeffs_max",
@@ -644,7 +658,9 @@ class SHRenderer(torch.nn.Module):
         if epoch in self.sh_upgrades:
             self.now_C += 1
             self.now_C = min(self.now_C, self.max_C)
-            console.print(f"Spherical Harmonics now: {self.now_C}", style="magenta")
+            console.print(
+                f"Spherical Harmonics order now: {self.now_C}", style="magenta"
+            )
 
         if epoch < self.warm_up:
             return
@@ -674,8 +690,9 @@ class SHRenderer(torch.nn.Module):
             self.grad_mean = torch.zeros_like(self.mean[..., 0])
             self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
             gc.collect()
-            self.N_changed = False
             torch.cuda.empty_cache()
+
+            self.N_changed = False
 
     def save(self, path):
         path = Path(path)
@@ -743,7 +760,7 @@ class SHRenderer(torch.nn.Module):
         for name, params in param_groups.items():
             opt_params.append({"params": params, "lr": self.scheduler[name](epoch)})
 
-        return torch.optim.Adam(opt_params, lr=lr, betas=(0.9, 0.99))
+        return self.opt_cls(opt_params, lr=lr, **self.opt_args)
 
     def select_masked_gaussians(self, mask):
         self.mean = torch.nn.Parameter(self.mean.data[mask])
@@ -784,8 +801,60 @@ class SHRenderer(torch.nn.Module):
 
         return pcd
 
-    def alpha_penalty(self, center=None):
-        if center is None:
+    def alpha_penalty(self, type="center_weighted"):
+        if type == "center_weighted":
             center = torch.zeros_like(self.mean.data[0])[None, ...]
+            return (self.alpha * (self.mean.detach() - center).norm(dim=-1)).mean()
+        elif type == "uniform_weighted":
+            return self.alpha.norm(dim=-1).mean()
+        else:
+            raise NotImplementedError()
 
-        return (self.alpha * (self.mean.detach() - center).norm(dim=-1)).mean()
+    def clip_grad(self):
+        assert hasattr(self.cfg, "grad_clip"), "grad_clip not found in cfg"
+
+        for field in self.fields:
+            if getattr(self.cfg.grad_clip, field) is not None:
+                # assert (
+                #     getattr(self, field).grad is not None
+                # ), f"{field}.grad is None when clipping"
+                if field in ["svec", "alpha"]:
+                    param = f"{field}_before_activation"
+                else:
+                    param = field
+                torch.nn.utils.clip_grad_norm_(
+                    getattr(self, param), self.cfg.grad_clip[field]
+                )
+
+    def force_split(self):
+        """force spliting **all** gaussians, used in generative, testing"""
+        split_mean = self.mean.data.repeat(2, 1)
+        split_qvec = self.qvec.data.repeat(2, 1)
+        split_svec = self.svec.data.repeat(2, 1)
+        split_sh_coeffs = self.sh_coeffs.data.repeat(2, 1, 1)
+        split_alpha_ba = self.alpha_before_activation.data.repeat(2)
+
+        split_rotmat = qvec2rotmat_batched(split_qvec).transpose(-1, -2)
+
+        split_gn = torch.randn(self.N * 2, 3, device=self.mean.device) * split_svec
+
+        new_mean = split_mean + torch.einsum("bij, bj -> bi", split_rotmat, split_gn)
+        new_qvec = split_qvec
+        new_svec_ba = self.svec_inv_act(split_svec / self.scale_shrink_factor)
+
+        new_sh_coeffs = split_sh_coeffs
+        new_alpha_ba = split_alpha_ba
+
+        self.mean = torch.nn.Parameter(new_mean)
+        self.qvec = torch.nn.Parameter(new_qvec)
+        self.svec_before_activation = torch.nn.Parameter(new_svec_ba)
+        self.sh_coeffs = torch.nn.Parameter(new_sh_coeffs)
+        self.alpha_before_activation = torch.nn.Parameter(new_alpha_ba)
+
+        self.N = 2 * self.N
+
+        self.grad_mean = torch.zeros_like(self.mean[..., 0])
+        self.cnt = torch.zeros_like(self.mean[..., 0], dtype=torch.int32)
+        gc.collect()
+        self.N_changed = False
+        torch.cuda.empty_cache()

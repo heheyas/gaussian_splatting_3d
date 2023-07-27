@@ -15,6 +15,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 
 from diffusers import PNDMScheduler, StableDiffusionPipeline, DiffusionPipeline
 from rich.console import Console
+from utils.misc import lineprofiler
 
 console = Console()
 
@@ -322,6 +323,7 @@ class StableDiffusion(nn.Module):
         )
 
 
+@lineprofiler
 def generate_image(
     prompt: str,
     negative: str = "",

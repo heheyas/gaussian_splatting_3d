@@ -175,3 +175,5 @@ saved/
 wandb/
 !images/*.png
 *.pdf
+point-e/
+point_e_model_cache/
